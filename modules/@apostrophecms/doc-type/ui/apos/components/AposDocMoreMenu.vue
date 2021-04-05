@@ -23,45 +23,31 @@ export default {
   props: {
     isModified: {
       type: Boolean,
-      default() {
-        return false;
-      }
+      default: false
     },
     isModifiedFromPublished: {
       type: Boolean,
-      default() {
-        return false;
-      }
+      default: false
     },
     isPublished: {
       type: Boolean,
-      default() {
-        return false;
-      }
+      default: false
     },
     canMoveToTrash: {
       type: Boolean,
-      default() {
-        return false;
-      }
+      default: false
     },
     canSaveDraft: {
       type: Boolean,
-      default() {
-        return false;
-      }
+      default: false
     },
     canDiscardDraft: {
       type: Boolean,
-      default() {
-        return false;
-      }
+      default: false
     },
     canCopy: {
       type: Boolean,
-      default() {
-        return false;
-      }
+      default: false
     },
     disabled: {
       type: Boolean,
@@ -122,7 +108,7 @@ export default {
         ] : []),
         ...(this.canSaveDraft ? [
           {
-            label: 'Save Draft',
+            label: this.isPublished ? 'Save Draft' : 'Preview Draft',
             action: 'saveDraft'
           }
         ] : []),
