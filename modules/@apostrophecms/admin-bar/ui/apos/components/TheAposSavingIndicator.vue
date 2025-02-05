@@ -6,10 +6,11 @@
     <span class="apos-admin-bar__status__inner">
       <component
         :is="savingIndicator.componentName"
+        v-if="savingIndicator?.componentName"
         v-bind="savingIndicator.options"
         class="apos-admin-bar__status__icon"
       />
-      <div class="apos-admin-bar__status__label" ref="statusLabel">
+      <div ref="statusLabel" class="apos-admin-bar__status__label">
         {{ $t(savingLabel) }}
       </div>
     </span>
@@ -120,14 +121,19 @@ export default {
 <style lang="scss" scoped>
 .apos-admin-bar__status {
   @include type-help;
-  position: relative;
-  margin-left: 7.5px;
-  opacity: 1;
-  color: var(--a-base-2);
-  transition: opacity 150ms;
+
+  & {
+    position: relative;
+    margin-left: 7.5px;
+    opacity: 1;
+    color: var(--a-base-2);
+    transition: opacity 200ms;
+  }
+
   &.apos-is-hidden {
     opacity: 0;
   }
+
   .apos-is-success {
     color: var(--a-success);
   }
@@ -147,14 +153,15 @@ export default {
 }
 
 .apos-admin-bar__status__icon {
-  margin-right: 7.5px;
   width: 18px;
   height: 18px;
+  margin-right: 7.5px;
 }
 
 .apos-admin-bar__status__label {
   opacity: 1;
   transition: opacity 200ms ease;
+
   &.apos-is-hidden {
     opacity: 0;
   }

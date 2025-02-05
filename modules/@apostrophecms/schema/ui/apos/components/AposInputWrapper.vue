@@ -1,35 +1,93 @@
 <template>
-  <div class="apos-field__wrapper">
+  <div
+    class="apos-field__wrapper"
+    :class="{
+      [`apos-field__wrapper--${field.type}`]: true,
+      'apos-field__wrapper--full-width': modifiers.includes('full-width'),
+    }"
+  >
     <component :is="wrapEl" :class="classList">
       <div class="apos-field__info">
         <component
-          v-if="field.label" :class="{'apos-sr-only': field.hideLabel }"
+          :is="labelEl"
+          v-if="field.label"
           class="apos-field__label"
-          :is="labelEl" :for="uid"
+          :class="{
+            'apos-sr-only': field.hideLabel,
+            'apos-field__label--meta-left':
+              field.meta && field.meta.position === 'left',
+          }"
+          :for="uid"
+          :data-apos-test-name="field.name"
+          :data-apos-test-label="field.label"
+          data-apos-test="field-label"
         >
-          {{ $t(label) }}
-          <span v-if="field.required" class="apos-field__required">
-            *
-          </span>
-          <span
-            v-if="(field.help || field.htmlHelp) && displayOptions.helpTooltip"
-            class="apos-field__help-tooltip"
-          >
-            <AposIndicator
-              icon="help-circle-icon"
-              class="apos-field__help-tooltip__icon"
-              :tooltip="field.help || field.htmlHelp"
-              :icon-size="11"
-              icon-color="var(--a-base-4)"
-            />
-          </span>
-          <span v-if="displayOptions.changed" class="apos-field__changed">
+          <span class="apos-field_label-info">
+            {{ $t(label) }}
+            <span v-if="field.required" class="apos-field__required">
+              * </span>
             <AposLabel
-              label="apostrophe:changed" class="apos-field__changed__label"
-              :modifiers="[ 'apos-is-warning', 'apos-is-filled' ]"
-              tooltip="apostrophe:fieldHasUnpublishedChanges"
+              v-if="field.tag"
+              class="apos-field__tag"
+              :label="field.tag.value || field.tag"
+              :modifiers="[
+                `apos-is-${field.tag.type || 'success'}`,
+                'apos-is-filled',
+              ]"
+              data-apos-test="field-tag"
             />
+            <span
+              v-if="(field.help || field.htmlHelp) && displayOptions.helpTooltip"
+              data-apos-test="field-help-tooltip"
+              class="apos-field__help-tooltip"
+            >
+              <AposIndicator
+                icon="help-circle-icon"
+                class="apos-field__help-tooltip__icon"
+                :tooltip="$t(field.help || field.htmlHelp)"
+                :icon-size="11"
+                icon-color="var(--a-base-4)"
+              />
+            </span>
+            <span
+              v-if="displayOptions.changed"
+              class="apos-field__changed"
+              data-apos-test="field-changed"
+            >
+              <AposLabel
+                label="apostrophe:changed"
+                class="apos-field__changed__label"
+                :modifiers="['apos-is-warning', 'apos-is-filled']"
+                tooltip="apostrophe:fieldHasUnpublishedChanges"
+              />
+            </span>
           </span>
+          <div>
+            <div v-if="hasExtraInfo" class="apos-field__label-extra-info">
+              <slot name="info" />
+            </div>
+            <span
+              data-apos-test="field-meta-wrapper"
+              class="apos-field__label-meta"
+            >
+              <slot name="meta">
+                <component
+                  :is="name"
+                  v-for="{ name, namespace, data } in metaComponents"
+                  :key="name"
+                  :field="field"
+                  :items="items"
+                  :namespace="namespace"
+                  :meta="data"
+                  :meta-raw="meta"
+                  :data-apos-test-component="name"
+                  :data-apos-test-namespace="namespace"
+                  data-apos-test="field-meta"
+                  @replace-field-value="replaceFieldValue"
+                />
+              </slot>
+            </span>
+          </div>
         </component>
         <!-- eslint-disable vue/no-v-html -->
         <p
@@ -37,135 +95,36 @@
           class="apos-field__help"
           v-html="$t(field.help || field.htmlHelp)"
         />
-        <!-- eslint-enable vue/no-v-html -->
         <slot name="additional" />
       </div>
       <slot name="body" />
-      <div v-if="errorMessage" class="apos-field__error">
-        {{ $t(errorMessage) }}
+      <div
+        v-if="errorMessage"
+        class="apos-field__error"
+        data-apos-test="field-error"
+      >
+        {{ getTranslatedErrorMessage(errorMessage) }}
       </div>
     </component>
-    <!-- CSS Escape hatch for additional interfaces like relatipnship managers -->
+    <!-- CSS Escape hatch for additional interfaces like relationship managers -->
     <slot name="secondary" />
   </div>
 </template>
 
 <script>
-// A component designed to be used as a scaffold for AposInputString and
-// friends, which override the `body` slot
+import AposInputWrapperLogic from '../logic/AposInputWrapper';
 export default {
   name: 'AposInputWrapper',
-  inject: {
-    originalDoc: {
-      default: () => ({
-        ref: null
-      })
-    }
-  },
-  props: {
-    field: {
-      type: Object,
-      required: true
-    },
-    error: {
-      type: [ String, Boolean, Object ],
-      default: null
-    },
-    uid: {
-      type: Number,
-      required: true
-    },
-    modifiers: {
-      type: Array,
-      default() {
-        return [];
+  mixins: [ AposInputWrapperLogic ],
+  methods: {
+    getTranslatedErrorMessage(message) {
+      if (message === 'required') {
+        return this.$t('apostrophe:required');
       }
-    },
-    items: {
-      type: Array,
-      default() {
-        return [];
+      if (message === 'invalid') {
+        return this.$t('apostrophe:invalid');
       }
-    },
-    displayOptions: {
-      type: Object,
-      default() {
-        return {};
-      }
-    }
-  },
-  data () {
-    return {
-      wrapEl: 'div',
-      labelEl: 'label'
-    };
-  },
-  computed: {
-    label () {
-      const { label, publishedLabel } = this.field;
-
-      if (
-        this.originalDoc.ref &&
-        this.originalDoc.ref.lastPublishedAt &&
-        publishedLabel
-      ) {
-        return publishedLabel;
-      }
-
-      return label;
-    },
-    classList: function () {
-      const classes = [
-        'apos-field',
-        `apos-field--${this.field.type}`,
-        `apos-field--${this.field.name}`
-      ];
-      if (this.field.classes) {
-        classes.push(this.field.classes);
-      }
-      if (this.errorClasses) {
-        classes.push(this.errorClasses);
-      }
-      if (this.modifiers) {
-        this.modifiers.forEach((m) => {
-          classes.push(`apos-field--${m}`);
-        });
-      }
-      return classes;
-    },
-    errorClasses: function () {
-      if (!this.error) {
-        return null;
-      }
-
-      let error = 'unknown';
-
-      if (typeof this.error === 'string') {
-        error = this.error;
-      } else if (this.error.name) {
-        error = this.error.name;
-      }
-
-      return `apos-field--error apos-field--error-${error}`;
-    },
-    errorMessage () {
-      if (this.error) {
-        if (typeof this.error === 'string') {
-          return this.error;
-        } else if (this.error.message) {
-          return this.error.message;
-        } else {
-          return 'Error';
-        }
-      } else {
-        return false;
-      }
-    }
-  },
-  mounted: function () {
-    if (this.field.type === 'radio' || this.field.type === 'checkbox') {
-      this.wrapEl = 'fieldset';
-      this.labelEl = 'legend';
+      return this.$t(message);
     }
   }
 };
@@ -176,10 +135,16 @@ export default {
   position: relative;
 }
 
+.apos-field__wrapper.apos-field__wrapper--full-width {
+  max-width: 100%;
+}
+
 .apos-field {
   border-width: 0;
   padding: 0;
-  [disable]:hover, [disabled] ~ .apos-choice-label-text:hover {
+
+  [disable]:hover,
+  [disabled] ~ .apos-choice-label-text:hover {
     cursor: not-allowed;
   }
 }
@@ -190,17 +155,55 @@ export default {
 
 .apos-field__label {
   @include type-label;
-  display: block;
-  margin: 0 0 $spacing-base;
-  padding: 0;
-  color: var(--a-text-primary);
+
+  & {
+    display: flex;
+    flex-wrap: nowrap;
+    align-items: center;
+    justify-content: space-between;
+    margin: 0 0 $spacing-base;
+    padding: 0;
+    color: var(--a-text-primary);
+    gap: $spacing-double;
+  }
+
+  &.apos-field__label--meta-left {
+    justify-content: flex-start;
+    gap: $spacing-base;
+
+    .apos-field__label-meta {
+      order: 1;
+    }
+
+    .apos-field_label-info {
+      order: 2;
+    }
+  }
+
+  &-info {
+    display: block;
+  }
+
+  &-meta {
+    display: inline-flex;
+    align-items: center;
+    gap: $spacing-half;
+    justify-content: flex-end;
+  }
+}
+
+.apos-field__label-meta:empty {
+  display: none;
 }
 
 .apos-field__help {
-  margin: 0 0 $spacing-base;
   @include type-base;
-  line-height: var(--a-line-tall);
-  color: var(--a-base-3);
+
+  & {
+    margin: 0 0 $spacing-base;
+    line-height: var(--a-line-tall);
+    color: var(--a-base-3);
+  }
 }
 
 .apos-field__help-tooltip__icon {
@@ -209,18 +212,25 @@ export default {
 
 .apos-field__changed {
   position: relative;
-  margin-left: $spacing-half;
   top: -2px;
+  margin-left: $spacing-half;
 }
 
 .apos-field__error {
   @include type-help;
-  margin: $spacing-base 0;
-  color: var(--a-danger);
+
+  & {
+    margin: $spacing-base 0;
+    color: var(--a-danger);
+  }
 }
 
 .apos-field__required {
   color: var(--a-danger);
+}
+
+.apos-field__tag {
+  margin-left: 5px;
 }
 
 .apos-field__help-tooltip {
@@ -231,35 +241,47 @@ export default {
 .apos-field--inline {
   display: flex;
   align-items: center;
+  justify-content: space-between;
+
   .apos-field__label {
     margin-bottom: 0;
   }
-  .apos-field__info,
-  .apos-input-wrapper {
-    width: 48%;
-  }
+
   .apos-field__info {
-    margin-right: 4%;
+    margin-right: 30px;
   }
+
+  .apos-field__info {
+    flex-shrink: 1;
+  }
+
+  .apos-input-wrapper {
+    flex-grow: 1;
+  }
+
   &.apos-field--range {
     display: block;
+
     .apos-range__input {
       margin: 5px 0 0;
     }
+
     .apos-range__scale {
       margin-top: 0;
     }
+
     .apos-range__value {
       padding-top: 9px;
     }
+
     .apos-field__info {
       margin: 0 0 5px;
     }
+
     .apos-field__info,
     .apos-input-wrapper {
       width: 100%;
     }
   }
 }
-
 </style>

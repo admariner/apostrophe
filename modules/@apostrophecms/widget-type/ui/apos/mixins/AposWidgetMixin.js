@@ -2,10 +2,26 @@ import { isEqual } from 'lodash';
 
 export default {
   props: {
+    // NOTE: docId is always null, investigate if needed
     docId: String,
     type: String,
     areaFieldId: String,
-    value: Object,
+    modelValue: Object,
+    mode: {
+      type: String,
+      default: 'draft'
+    },
+    meta: {
+      type: Object,
+      default() {
+        return {};
+      }
+    },
+    // Ignored for server side rendering
+    areaField: Object,
+    followingValues: Object,
+    // Fix missing prop rendered as `[object Object]` attribute in the DOM
+    options: Object,
     rendering: {
       type: Object,
       default() {
@@ -14,7 +30,7 @@ export default {
     }
   },
   watch: {
-    value: {
+    modelValue: {
       handler() {
         this.renderContent();
       }
@@ -38,7 +54,7 @@ export default {
       apos.bus.$emit('widget-rendering');
       const parameters = {
         _docId: this.docId,
-        widget: this.value,
+        widget: this.modelValue,
         areaFieldId: this.areaFieldId,
         type: this.type
       };
@@ -47,7 +63,7 @@ export default {
           this.rendered = this.rendering.html;
         } else {
           this.rendered = '...';
-          this.rendered = await apos.http.post(`${apos.area.action}/render-widget?aposEdit=1&aposMode=draft`, {
+          this.rendered = await apos.http.post(`${apos.area.action}/render-widget?aposEdit=1&aposMode=${this.mode}`, {
             busy: true,
             body: parameters
           });
@@ -62,6 +78,17 @@ export default {
         this.rendered = '<p>Unable to render this widget.</p>';
         console.error('Unable to render widget. Possibly the schema has been changed and the existing widget does not pass validation.', e);
       }
+    },
+    getClasses() {
+      const { placeholderClass } = this.moduleOptions;
+
+      if (!placeholderClass) {
+        return {};
+      }
+
+      return {
+        [placeholderClass]: this.modelValue.aposPlaceholder === true
+      };
     }
   }
 };

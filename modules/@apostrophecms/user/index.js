@@ -17,7 +17,7 @@
 //
 // For security the `password` property is not stored as plaintext and
 // is not kept in the aposDocs collection. Instead, it is hashed and salted
-// using the `credential` module and the resulting hash is stored
+// using the `credentials` module and the resulting hash is stored
 // in a separate `aposUsersSafe` collection.
 //
 // Additional secrets may be hashed in this way. If you set the
@@ -28,10 +28,14 @@
 // You may also call `apos.user.addSecret('name')` to add a new
 // secret property. This is convenient when implementing a module
 // such as `@apostrophecms/signup`.
+//
+// ### `adminLocale` schema field
+// A select field auto-created by the module, allowing the user to choose
+// their preferred language for the admin UI. It will be added only if
+// @apostrophecms/i18n is configured with `adminLocales`.
 
-const credential = require('credential');
+const passwordHash = require('./lib/password-hash.js');
 const prompts = require('prompts');
-const Promise = require('bluebird');
 
 module.exports = {
   extend: '@apostrophecms/piece-type',
@@ -47,9 +51,43 @@ module.exports = {
     editRole: 'admin',
     publishRole: 'admin',
     viewRole: 'admin',
-    showPermissions: true
+    showPermissions: true,
+    relationshipSuggestionIcon: 'account-box-icon',
+    scrypt: {
+      // These are the defaults. If you choose to pass
+      // this option, you can pass one or more new values.
+      // "cost" must be a power of 2. See:
+      //
+      // https://nodejs.org/api/crypto.html#cryptoscryptpassword-salt-keylen-options-callback
+      //
+      // Do not pass maxmem, it is calculated automatically.
+      //
+      // cost: 131072,
+      // parallelization: 1,
+      // blockSize: 8
+    }
   },
-  fields(self) {
+  fields(self, options) {
+    const fields = {};
+    // UI Locale
+    const locales = [ ...options.apos.i18n.adminLocales ];
+    if (locales.length > 0) {
+      const def = options.apos.i18n.defaultAdminLocale || '';
+      fields.localeField = {
+        type: 'select',
+        name: 'adminLocale',
+        label: 'apostrophe:uiLanguageLabel',
+        choices: [
+          {
+            label: 'apostrophe:uiLanguageWebsite',
+            value: ''
+          },
+          ...locales
+        ],
+        def
+      };
+    }
+
     return {
       add: {
         title: {
@@ -78,6 +116,7 @@ module.exports = {
         },
         role: {
           type: 'role',
+          label: 'apostrophe:role',
           choices: [
             {
               label: 'apostrophe:guest',
@@ -98,14 +137,16 @@ module.exports = {
           ],
           def: 'guest',
           required: true
-        }
+        },
+        ...fields
       },
       remove: [ 'visibility' ],
       group: {
         basics: {
           label: 'apostrophe:basics',
           fields: [
-            'title'
+            'title',
+            'adminLocale'
           ]
         },
         utility: {
@@ -148,7 +189,7 @@ module.exports = {
       post: {
         async uniqueUsername(req) {
           const username = self.apos.launder.string(req.body.username);
-          const user = self.find(req, { username: username }).project({
+          const user = self.find(req, { username }).project({
             _id: 1,
             username: 1
           }).toObject();
@@ -293,6 +334,9 @@ module.exports = {
 
         await self.hashPassword(doc, safeUser);
         await self.hashSecrets(doc, safeUser);
+
+        await self.emit('beforeSaveSafe', req, safeUser, doc);
+
         if (action === 'insert') {
           await self.safe.insertOne(safeUser);
         } else {
@@ -372,9 +416,13 @@ module.exports = {
         if (!doc[secret]) {
           return;
         }
-        const hash = await require('util').promisify(self.pw.hash)(doc[secret]);
+        const hash = await self.pw.hash(doc[secret]);
+        const annotatedHash = JSON.stringify({
+          ...JSON.parse(hash),
+          credentials3: true
+        });
         delete doc[secret];
-        safeUser[secret + 'Hash'] = hash;
+        safeUser[secret + 'Hash'] = annotatedHash;
         doc[`_${secret}Updated`] = true;
       },
 
@@ -392,28 +440,52 @@ module.exports = {
       // in `options.secrets` when configuring this module or via
       // `addSecrets` are not stored as plaintext and are not kept in the
       // aposDocs collection. Instead, they are hashed and salted using the
-      // `credential` module and the resulting hash is stored
+      // the same algorithm applied to passwords and the resulting hash is stored
       // in a separate `aposUsersSafe` collection. This method
       // can be used to verify that `attempt` matches the
       // previously hashed value for the property named `secret`,
-      // without ever storing the actual value of the secret
+      // without ever storing the actual value of the secret.
       //
       // If the secret does not match, an `invalid` error is thrown.
       // Otherwise the method returns normally.
 
       async verifySecret(user, secret, attempt) {
-        const verify = Promise.promisify(self.pw.verify);
         const safeUser = await self.safe.findOne({ _id: user._id });
         if (!safeUser) {
           throw new Error('No such user in the safe.');
         }
-
-        const isVerified = await verify(safeUser[secret + 'Hash'], attempt);
+        const key = secret + 'Hash';
+        const isVerified = await self.pw.verify(migrate(safeUser[key]), attempt);
 
         if (isVerified) {
+          if ((typeof isVerified) === 'string') {
+            // "verify" updated the hash, store the new one
+            const $set = {};
+            $set[key] = isVerified;
+            await self.safe.updateOne({
+              _id: user._id
+            }, {
+              $set
+            });
+          }
           return null;
         } else {
           throw self.apos.error('invalid', `Incorrect ${secret}`);
+        }
+
+        function migrate(json) {
+          const data = JSON.parse(json);
+
+          // * Do not re-encode legacy salt generated by credentials@3
+          // * Do not alter salts not generated by the credentials module
+          if (data.credentials3 || (data.hashMethod !== 'pbkdf2')) {
+            return json;
+          }
+
+          return JSON.stringify({
+            ...data,
+            salt: Buffer.from(data.salt, 'utf8').toString('base64')
+          });
         }
       },
 
@@ -430,13 +502,15 @@ module.exports = {
         await self.safe.updateOne({ _id: user._id }, changes);
       },
 
-      // Initialize the [credential](https://npmjs.org/package/credential) module.
+      // Initialize password hashing system. Name is for
+      // legacy reasons
+
       initializeCredential() {
-        self.pw = credential({
-          // For efficient unit tests only. Reducing the work factor
-          // for actual credentials increases the speed of brute force attacks
-          // if the database is ever compromised
-          work: self.options.insecurePasswords ? 0.01 : 1
+        self.pw = passwordHash({
+          error(s) {
+            return self.apos.error('invalid', s);
+          },
+          scrypt: self.options.scrypt
         });
       },
 
@@ -495,7 +569,7 @@ module.exports = {
         const username = argv._[1];
         const req = self.apos.task.getReq();
 
-        const user = await self.apos.user.find(req, { username: username }).toObject();
+        const user = await self.apos.user.find(req, { username }).toObject();
         if (!user) {
           throw new Error('No such user.');
         }

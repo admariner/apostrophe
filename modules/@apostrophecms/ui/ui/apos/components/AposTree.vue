@@ -7,35 +7,34 @@
       @calculated="setWidths"
     />
     <AposTreeHeader
-      :headers="headers" :icons="icons"
-      :col-widths="colWidths" :hidden="options.hideHeader"
+      :headers="headers"
+      :icons="icons"
+      :col-widths="colWidths"
+      :hidden="options.hideHeader"
     />
     <AposTreeRows
-      v-model="checkedProxy"
+      v-model:checked="checkedProxy"
+      list-id="root"
       :rows="myItems"
       :headers="headers"
       :icons="icons"
       :col-widths="colWidths"
       :level="1"
       :nested="nested"
-      @update="update"
-      list-id="root"
       :options="options"
       :tree-id="treeId"
+      :module-options="moduleOptions"
+      @update="update"
     />
   </div>
 </template>
 
 <script>
 import { klona } from 'klona';
-import cuid from 'cuid';
+import { createId } from '@paralleldrive/cuid2';
 
 export default {
   name: 'AposTree',
-  model: {
-    prop: 'checked',
-    event: 'change'
-  },
   props: {
     headers: {
       type: Array,
@@ -70,16 +69,22 @@ export default {
       default () {
         return {};
       }
+    },
+    moduleOptions: {
+      type: Object,
+      default() {
+        return {};
+      }
     }
   },
-  emits: [ 'update', 'change' ],
+  emits: [ 'update', 'update:checked' ],
   data() {
     return {
       // Copy the `items` property to mutate with VueDraggable.
       myItems: klona(this.items),
       nested: false,
       colWidths: null,
-      treeId: cuid()
+      treeId: createId()
     };
   },
   computed: {
@@ -89,7 +94,7 @@ export default {
         return this.checked;
       },
       set(val) {
-        this.$emit('change', val);
+        this.$emit('update:checked', val);
       }
     },
     spacingRow() {
@@ -198,7 +203,10 @@ export default {
 
   .apos-tree {
     @include type-base;
-    color: var(--a-text-primary);
+
+    & {
+      color: var(--a-text-primary);
+    }
   }
 
 </style>

@@ -1,81 +1,102 @@
 
 <template>
   <div
+    ref="widget"
     class="apos-area-widget-wrapper"
     :class="{'apos-area-widget-wrapper--foreign': foreign}"
     :data-area-widget="widget._id"
     :data-area-label="widgetLabel"
+    :data-apos-widget-foreign="foreign ? 1 : 0"
+    :data-apos-widget-id="widget._id"
   >
     <div
+      ref="wrapper"
       class="apos-area-widget-inner"
-      :class="ui.container"
+      :class="containerClasses"
+      tabindex="0"
       @mouseover="mouseover($event)"
       @mouseleave="mouseleave"
-      @click="getFocus($event, widget._id)"
+      @click="getFocus($event, widget._id);"
+      @focus="attachKeyboardFocusHandler"
+      @blur="removeKeyboardFocusHandler"
     >
       <div
+        ref="label"
         class="apos-area-widget-controls apos-area-widget__label"
-        :class="ui.labels"
+        :class="labelsClasses"
       >
         <ol class="apos-area-widget__breadcrumbs">
+          <li class="apos-area-widget__breadcrumb apos-area-widget__breadcrumb--widget-icon">
+            <AposIndicator :icon="widgetIcon" :icon-size="13" />
+          </li>
           <li
-            v-for="item in breadcrumbs.list"
+            v-for="(item, index) in breadcrumbs.list"
             :key="item.id"
             class="apos-area-widget__breadcrumb"
+            :data-apos-widget-breadcrumb="breadcrumbs.list.length - index"
           >
             <AposButton
               type="quiet"
-              @click="getFocus($event, item.id)"
               :label="item.label"
               icon="chevron-right-icon"
               :icon-size="9"
               :modifiers="['icon-right', 'no-motion']"
+              :disable-focus="!(isHovered || isFocused)"
+              @click="getFocus($event, item.id)"
             />
           </li>
-          <li class="apos-area-widget__breadcrumb">
+          <li class="apos-area-widget__breadcrumb" data-apos-widget-breadcrumb="0">
             <AposButton
               type="quiet"
-              @click="foreign ? $emit('edit', i) : false"
               :label="foreign ? {
                 key: 'apostrophe:editWidgetType',
                 label: $t(widgetLabel)
               } : widgetLabel"
-              tooltip="apostrophe:editWidgetForeignTooltip"
-              :icon="foreign ? 'earth-icon' : null"
+              :tooltip="!isContextual && 'apostrophe:editWidgetForeignTooltip'"
               :icon-size="11"
               :modifiers="['no-motion']"
+              :disable-focus="!(isHovered || isFocused)"
+              @click="foreign ? $emit('edit', i) : null"
+              @dblclick="(!foreign && !isContextual) ? $emit('edit', i) : null"
             />
           </li>
         </ol>
       </div>
       <div
         class="apos-area-widget-controls apos-area-widget-controls--add apos-area-widget-controls--add--top"
-        :class="ui.addTop"
+        :class="addClasses"
       >
         <AposAreaMenu
           v-if="!foreign"
           :max-reached="maxReached"
-          @add="$emit('add', $event);"
-          @menu-open="toggleMenuFocus($event, 'top', true)"
-          @menu-close="toggleMenuFocus($event, 'top', false)"
           :context-menu-options="contextMenuOptions"
           :index="i"
           :widget-options="widgets"
           :options="options"
           :disabled="disabled"
+          :tabbable="isHovered || isFocused"
+          :menu-id="`${widget._id}-widget-menu-top`"
+          :class="{[classes.open]: menuOpen === 'top'}"
+          @add="$emit('add', $event);"
         />
       </div>
       <div
+        class="apos-area-widget-guard"
+        :class="{'apos-is-disabled': isFocused}"
+      />
+      <div
         class="apos-area-widget-controls apos-area-widget-controls--modify"
-        :class="ui.controls"
+        :class="controlsClasses"
       >
         <AposWidgetControls
+          v-if="!foreign"
           :first="i === 0"
           :last="i === next.length - 1"
           :options="{ contextual: isContextual }"
           :foreign="foreign"
           :disabled="disabled"
           :max-reached="maxReached"
+          :tabbable="isFocused"
           @up="$emit('up', i);"
           @remove="$emit('remove', i);"
           @edit="$emit('edit', i);"
@@ -85,55 +106,53 @@
           @down="$emit('down', i);"
         />
       </div>
-      <!--
-        Note: we will not need this guard layer when we implement widget controls outside of the widget DOM
-        because we will be drawing and fitting a new layer ontop of the widget, which we can use to proxy event handling.
-      -->
-      <div
-        class="apos-area-widget-guard"
-        :class="{'apos-is-disabled': focused}"
-      />
       <!-- Still used for contextual editing components -->
       <component
-        v-if="isContextual && !foreign"
         :is="widgetEditorComponent(widget.type)"
+        v-if="isContextual && !foreign"
+        :key="generation"
         :options="widgetOptions"
         :type="widget.type"
-        :value="widget"
-        @update="$emit('update', $event)"
+        :model-value="widget"
+        :meta="meta"
         :doc-id="docId"
-        :focused="focused"
-        :key="generation"
+        :focused="isFocused"
+        @update="$emit('update', $event)"
       />
       <component
-        v-else
         :is="widgetComponent(widget.type)"
+        v-else
+        :id="widget._id"
+        :key="`${generation}-preview`"
         :options="widgetOptions"
         :type="widget.type"
-        :id="widget._id"
         :area-field-id="fieldId"
+        :area-field="field"
+        :following-values="followingValuesWithParent"
+        :model-value="widget"
         :value="widget"
+        :meta="meta"
         :foreign="foreign"
-        @edit="$emit('edit', i);"
         :doc-id="docId"
         :rendering="rendering"
-        :key="generation"
+        @edit="$emit('edit', i);"
       />
       <div
         class="apos-area-widget-controls apos-area-widget-controls--add apos-area-widget-controls--add--bottom"
-        :class="ui.addBottom"
+        :class="addClasses"
       >
         <AposAreaMenu
           v-if="!foreign"
           :max-reached="maxReached"
-          @add="$emit('add', $event)"
           :context-menu-options="bottomContextMenuOptions"
           :index="i + 1"
           :widget-options="widgets"
           :options="options"
           :disabled="disabled"
-          @menu-open="toggleMenuFocus($event, 'bottom', true)"
-          @menu-close="toggleMenuFocus($event, 'bottom', false)"
+          :tabbable="isHovered || isFocused"
+          :menu-id="`${widget._id}-widget-menu-bottom`"
+          :class="{[classes.open]: menuOpen === 'bottom'}"
+          @add="$emit('add', $event)"
         />
       </div>
     </div>
@@ -141,14 +160,17 @@
 </template>
 
 <script>
-import { klona } from 'klona';
-import AposIndicator from '../../../../ui/ui/apos/components/AposIndicator.vue';
+import AposIndicator from 'Modules/@apostrophecms/ui/components/AposIndicator.vue';
 
 export default {
   name: 'AposAreaWidget',
   components: { AposIndicator },
   props: {
     widgetHovered: {
+      type: String,
+      default: null
+    },
+    nonForeignWidgetHovered: {
       type: String,
       default: null
     },
@@ -179,8 +201,24 @@ export default {
         return {};
       }
     },
+    meta: {
+      type: Object,
+      default() {
+        return {};
+      }
+    },
+    followingValues: {
+      type: Object,
+      default() {
+        return {};
+      }
+    },
     next: {
       type: Array,
+      required: true
+    },
+    field: {
+      type: Object,
       required: true
     },
     fieldId: {
@@ -214,38 +252,16 @@ export default {
   },
   emits: [ 'clone', 'up', 'down', 'remove', 'edit', 'cut', 'copy', 'update', 'add', 'changed' ],
   data() {
-    const initialState = {
-      controls: {
-        show: false
-      },
-      container: {
-        highlight: false,
-        focus: false
-      },
-      add: {
-        bottom: {
-          show: false,
-          focus: false
-        },
-        top: {
-          show: false,
-          focus: false
-        }
-      },
-      labels: {
-        show: false
-      }
-    };
     return {
-      blankState: klona(initialState),
-      state: klona(initialState),
-      highlightable: false,
-      focused: false,
+      mounted: false, // hack around needing DOM to be rendered for computed classes
+      isSuppressed: false,
+      menuOpen: null,
       classes: {
         show: 'apos-is-visible',
         open: 'apos-is-open',
         focus: 'apos-is-focused',
-        highlight: 'apos-is-highlighted'
+        highlight: 'apos-is-highlighted',
+        adjust: 'apos-is-ui-adjusted'
       },
       breadcrumbs: {
         $lastEl: null,
@@ -255,14 +271,32 @@ export default {
     };
   },
   computed: {
+    // Passed only to the preview layer (custom preview components).
+    followingValuesWithParent() {
+      return Object.entries(this.followingValues || {})
+        .reduce((acc, [ key, value ]) => {
+          acc[`<${key}`] = value;
+          return acc;
+        }, {});
+    },
     bottomContextMenuOptions() {
       return {
         ...this.contextMenuOptions,
         menuPlacement: 'top'
       };
     },
+    widgetIcon() {
+      const natural = this.contextMenuOptions.menu
+        .filter(item => item.name === this.widget.type)[0]?.icon || 'shape-icon';
+      return this.foreign ? 'earth-icon' : natural;
+    },
     widgetLabel() {
-      return window.apos.modules[`${this.widget.type}-widget`].label;
+      const moduleName = `${this.widget.type}-widget`;
+      const module = window.apos.modules[moduleName];
+      if (!module) {
+        console.error(`No ${moduleName} module found for widget type ${this.widget.type}`);
+      }
+      return module.label;
     },
     widgetOptions() {
       return this.widgets[this.widget.type];
@@ -274,42 +308,51 @@ export default {
     moduleOptions() {
       return window.apos.area;
     },
-    isSuppressed() {
-      if (this.focused) {
+    isFocused() {
+      if (this.isSuppressed) {
         return false;
-      }
-
-      if (this.highlightable) {
-        return false;
-      }
-
-      if (this.widgetHovered) {
-        return this.widgetHovered !== this.widget._id;
       } else {
-        return false;
+        if (this.widgetFocused === this.widget._id) {
+          document.addEventListener('click', this.unfocus);
+        }
+        return this.widgetFocused === this.widget._id;
       }
     },
-    // Sets up all the interaction classes based on the current
-    // state. If our widget is suppressed, return a blank UI state and reset
-    // our real one.
-    ui() {
-      const state = {
-        controls: this.state.controls.show ? this.classes.show : null,
-        labels: this.state.labels.show ? this.classes.show : null,
-        container: this.state.container.focus ? this.classes.focus
-          : (this.state.container.highlight ? this.classes.highlight : null),
-        addTop: this.state.add.top.focus ? this.classes.focus
-          : (this.state.add.top.show ? this.classes.show : null),
-        addBottom: this.state.add.bottom.focus ? this.classes.focus
-          : (this.state.add.bottom.show ? this.classes.show : null)
+    isHovered() {
+      return this.widgetHovered === this.widget._id;
+    },
+    isHighlighted() {
+      const $parent = this.getParent();
+      return $parent && $parent.dataset.areaWidget === this.widgetFocused;
+    },
+    nonForeignHovered() {
+      return this.nonForeignWidgetHovered === this.widget._id;
+    },
+    controlsClasses() {
+      return {
+        [this.classes.show]: this.isFocused
       };
-
-      if (this.isSuppressed) {
-        this.resetState();
-        return this.blankState;
+    },
+    containerClasses() {
+      const classes = {
+        [this.classes.highlight]: this.isHighlighted || this.isHovered,
+        [this.classes.focus]: this.isFocused
+      };
+      if (this.mounted) {
+        classes[this.classes.adjust] = this.adjustUi();
       }
-
-      return state;
+      return classes;
+    },
+    labelsClasses() {
+      return {
+        [this.classes.show]: this.isHovered || this.isFocused
+      };
+    },
+    addClasses() {
+      return {
+        [this.classes.show]: this.isHovered || this.isFocused,
+        [`${this.classes.open}--menu-${this.menuOpen}`]: !!this.menuOpen
+      };
     },
     foreign() {
       // Cast to boolean is necessary to satisfy prop typing
@@ -317,25 +360,12 @@ export default {
     }
   },
   watch: {
-    widgetFocused (newVal) {
-      if (newVal === this.widget._id) {
-        this.focus();
+    isFocused(newVal) {
+      if (newVal) {
+        this.$refs.wrapper.addEventListener('keydown', this.handleKeyboardUnfocus);
       } else {
-        // reset everything
-        this.resetState();
-        this.focused = false;
-      }
-      const $parent = this.getParent();
-      if (
-        $parent &&
-        $parent.dataset.areaWidget === newVal
-      ) {
-        // Our parent was focused
-        this.resetState();
-        this.state.container.highlight = true;
-        this.highlightable = true;
-      } else {
-        this.highlightable = false;
+        this.menuOpen = null;
+        this.$refs.wrapper.removeEventListener('keydown', this.handleKeyboardUnfocus);
       }
     }
   },
@@ -350,15 +380,15 @@ export default {
     }
   },
   mounted() {
+    this.mounted = true;
     // AposAreaEditor is listening for keyboard input that triggers
     // a 'focus my parent' plea
     apos.bus.$on('widget-focus-parent', this.focusParent);
+    apos.bus.$on('context-menu-toggled', this.getFocusForMenu);
 
     this.breadcrumbs.$lastEl = this.$el;
 
-    if (!this.foreign) {
-      this.getBreadcrumbs();
-    }
+    this.getBreadcrumbs();
 
     if (this.widgetFocused) {
       // If another widget was in focus (because the user clicked the "add"
@@ -367,12 +397,50 @@ export default {
       apos.bus.$emit('widget-focus', this.widget._id);
     }
   },
+  unmounted() {
+    // Remove the focus parent listener when unmounted
+    apos.bus.$off('widget-focus-parent', this.focusParent);
+  },
   methods: {
+
+    getFocusForMenu({ menuId, isOpen }) {
+      if (
+        (
+          menuId === `${this.widget._id}-widget-menu-top` ||
+          menuId === `${this.widget._id}-widget-menu-bottom`
+        ) &&
+        isOpen
+      ) {
+        const whichMenu = menuId.split('-')[menuId.split('-').length - 1];
+        this.menuOpen = whichMenu;
+        this.getFocus(null, this.widget._id);
+      } else {
+        this.menuOpen = null;
+      }
+    },
+
+    // Determine whether or not we should adjust the label based on its position to the admin bar
+    adjustUi() {
+      const { height: labelHeight } = this.$refs.label.getBoundingClientRect();
+      const { top: widgetTop } = this.$refs.widget.getBoundingClientRect();
+      const adminBarHeight = window.apos.modules['@apostrophecms/admin-bar'].height;
+      const offsetTop = widgetTop + window.scrollY;
+      return offsetTop - labelHeight < adminBarHeight;
+    },
+
+    attachKeyboardFocusHandler() {
+      this.$refs.wrapper?.addEventListener('keydown', this.handleKeyboardFocus);
+    },
+
+    removeKeyboardFocusHandler() {
+      this.$refs.wrapper?.removeEventListener('keydown', this.handleKeyboardFocus);
+    },
+
     // Focus parent, useful for obtrusive UI
     focusParent() {
       // Something above us asked the focused widget to try and focus its parent
       // We only care about this if we're focused ...
-      if (this.focused) {
+      if (this.isFocused) {
         const $parent = this.getParent();
         // .. And have a parent
         if ($parent) {
@@ -383,7 +451,10 @@ export default {
 
     // Ask the parent AposAreaEditor to make us focused
     getFocus(e, id) {
-      e.stopPropagation();
+      if (e) {
+        e.stopPropagation();
+      }
+      this.isSuppressed = false;
       apos.bus.$emit('widget-focus', id);
     },
 
@@ -392,68 +463,51 @@ export default {
       if (e) {
         e.stopPropagation();
       }
-      if (this.focused) {
-        return;
-      }
-      this.state.add.top.show = true;
-      this.state.add.bottom.show = true;
-      this.state.container.highlight = true;
-      this.state.labels.show = true;
-      apos.bus.$emit('widget-hover', this.widget._id);
+      const closest = this.foreign && this.$el.closest('[data-apos-widget-foreign="0"]');
+      const closestId = closest && closest.getAttribute('data-apos-widget-id');
+      apos.bus.$emit('widget-hover', {
+        _id: this.widget._id,
+        nonForeignId: this.foreign ? closestId : null
+      });
     },
 
     mouseleave() {
-      if (!this.highlightable) {
-        // Force highlight when a parent has been focused
-        this.state.container.highlight = false;
-      }
-      if (!this.focused) {
-        this.state.labels.show = false;
-        this.state.add.top.show = false;
-        this.state.add.bottom.show = false;
+      if (this.isHovered) {
+        apos.bus.$emit('widget-hover', {
+          _id: null,
+          nonForeignId: null
+        });
       }
     },
-
-    focus(e) {
-      if (e) {
-        e.stopPropagation();
-      }
-      this.focused = true;
-      this.state.container.focus = true;
-      this.state.controls.show = true;
-      this.state.add.top.show = true;
-      this.state.add.bottom.show = true;
-      this.state.labels.show = true;
-      document.addEventListener('click', this.unfocus);
-    },
-
     unfocus(event) {
       if (!this.$el.contains(event.target)) {
-        this.focused = false;
-        this.resetState();
-        this.highlightable = false;
-        document.removeEventListener('click', this.blurUnfocus);
+        this.isSuppressed = true;
+        document.removeEventListener('click', this.unfocus);
         apos.bus.$emit('widget-focus', null);
       }
     },
 
-    toggleMenuFocus(event, name, value) {
-      if (event) {
-        event.cancelBubble = true;
-      }
-      this.state.add[name].focus = value;
-
-      if (value) {
-        this.focus();
+    handleKeyboardFocus($event) {
+      if ($event.key === 'Enter' || $event.code === 'Space') {
+        $event.preventDefault();
+        this.getFocus($event, this.widget._id);
+        this.$refs.wrapper.removeEventListener('keydown', this.handleKeyboardFocus);
       }
     },
 
-    resetState() {
-      this.state = klona(this.blankState);
+    handleKeyboardUnfocus($event) {
+      if ($event.key === 'Escape') {
+        this.getFocus($event, null);
+        document.activeElement.blur();
+        this.$refs.wrapper.focus();
+      }
     },
 
     getParent() {
-      return apos.util.closest(this.$el.parentNode, '[data-area-widget]');
+      if (!this.mounted) {
+        return false;
+      }
+      return this.$el.parentNode ? apos.util.closest(this.$el.parentNode, '[data-area-widget]') : false;
     },
 
     // Hacky way to get the parents tree of a widget
@@ -477,14 +531,36 @@ export default {
     widgetComponent(type) {
       return this.moduleOptions.components.widgets[type];
     },
+
     widgetEditorComponent(type) {
       return this.moduleOptions.components.widgetEditors[type];
     }
+
   }
 };
 </script>
 
 <style lang="scss" scoped>
+@mixin showButton() {
+  transform: scale(1.15);
+  background-size: 150% 100%;
+  border-radius: 10px;
+  transition-duration: 500ms;
+
+  /* stylelint-disable-next-line max-nesting-depth */
+  .apos-button__label {
+    max-width: 100px;
+    max-height: 100px;
+    transition-duration: 500ms;
+    padding: 0 5px 0 0;
+  }
+
+  /* stylelint-disable-next-line max-nesting-depth */
+  .apos-button__icon {
+    margin-right: 5px;
+  }
+}
+
   .apos-area-widget-guard {
     position: absolute;
     top: 0;
@@ -504,40 +580,44 @@ export default {
   .apos-area-widget-inner {
     position: relative;
     min-height: 50px;
-    &:before, &:after {
-      content: '';
-      position: absolute;
-      left: 0;
-      width: 100%;
-      height: 1px;
-      border-top: 1px dashed var(--a-primary);
-      opacity: 0;
-      transition: opacity 0.2s ease;
-      pointer-events: none;
+    border-radius: var(--a-border-radius);
+    outline: 1px solid transparent;
+    transition: outline 200ms ease;
+
+    &:focus {
+      box-shadow: 0 0 11px 1px var(--a-primary-transparent-25);
+      outline: 1px dashed var(--a-primary-transparent-50);
+      outline-offset: 2px;
     }
 
-    &:before {
-      top: 0;
-    }
-    &:after {
-      bottom: 0;
-    }
     &.apos-is-highlighted {
-      &:before, &:after {
-        opacity: 0.4;
-      }
+      outline: 1px dashed var(--a-primary-transparent-50);
     }
+
     &.apos-is-focused {
-      &:before, &:after {
-        opacity: 1;
-        border-top: 1px solid var(--a-primary);
+      outline: 1px dashed var(--a-primary);
+
+      &:deep(.apos-rich-text-editor__editor.apos-is-visually-empty) {
+        box-shadow: none;
       }
     }
 
-    .apos-area-widget-inner &:after {
+    &.apos-is-ui-adjusted {
+      .apos-area-widget-controls--modify {
+        top: 0;
+        transform: translate3d(-10px, 50px, 0);
+      }
+
+      .apos-area-widget__label {
+        transform: translate(-10px, 10px);
+      }
+    }
+
+    .apos-area-widget-inner &::after {
       display: none;
     }
-    .apos-area-widget-inner &:before {
+
+    .apos-area-widget-inner &::before {
       z-index: $z-index-under;
       top: 0;
       left: 0;
@@ -548,17 +628,19 @@ export default {
       background-color: var(--a-base-5);
       pointer-events: none;
     }
-    .apos-area-widget-inner &.apos-is-focused:before,
-    .apos-area-widget-inner &.apos-is-highlighted:before {
+
+    .apos-area-widget-inner &.apos-is-focused::before,
+    .apos-area-widget-inner &.apos-is-highlighted::before {
       z-index: $z-index-default;
     }
   }
 
   .apos-area-widget-inner .apos-area-widget-inner {
-    &.apos-is-highlighted:before {
+    &.apos-is-highlighted::before {
       opacity: 0.1;
     }
-    &.apos-is-focused:before {
+
+    &.apos-is-focused::before {
       opacity: 0.15;
     }
   }
@@ -568,40 +650,110 @@ export default {
     position: absolute;
     opacity: 0;
     pointer-events: none;
-    transition: all 0.3s ease;
+    transition: all 300ms ease;
 
     &.apos-area-widget__label {
       z-index: $z-index-widget-label;
     }
+
     &.apos-is-focused {
       z-index: $z-index-widget-focused-controls;
     }
   }
 
-  // TODO commented code awaiting the triumphant return of the canvas -SR
-
   .apos-area-widget-controls--modify {
+    top: 50%;
     right: 0;
-    // transform: translate3d(calc(100% + 5px), 0, 0);
-    // @media (max-width: ($a-canvas-max + 100px)) { // include extra space for tools
-    // transform: translate3d(-10px, 30px, 0);
-    transform: translate3d(-10px, 30px, 0);
-    // }
-  }
+    transform: translate3d(-10px, -50%, 0);
 
-  // .apos-area-widget-inner .apos-area-widget-inner .apos-area-widget-controls--modify {
-  // right: auto;
-  // left: 0;
-  // transform: translate3d(calc(-100% - 5px), 0, 0);
-  // @media (max-width: ($a-canvas-max + 100px)) { // include extra space for tools
-  // transform: translate3d(5px, 30px, 0);
-  // }
-  // }
+    :deep(.apos-button-group__inner) {
+      border: 1px solid var(--a-primary-transparent-25);
+      box-shadow: var(--a-box-shadow);
+    }
+
+    :deep(.apos-button-group) .apos-button {
+      width: 32px;
+      height: 32px;
+      padding: 0;
+      border: none;
+      border-radius: var(--a-border-radius);
+      background-color: transparent;
+      color: var(--a-base-1);
+
+      &:hover[disabled] {
+        background-color: transparent;
+      }
+
+      &:hover:not([disabled]), &:active:not([disabled]), &:focus:not([disabled]) {
+        background-color: var(--a-primary-transparent-10);
+        color: var(--a-primary);
+      }
+
+      &:focus:not([disabled])::after {
+        background-color: transparent;
+      }
+
+      &[disabled] {
+        color: var(--a-base-6);
+      }
+    }
+  }
 
   .apos-area-widget-controls--add {
     top: 0;
     left: 50%;
     transform: translate(-50%, -50%);
+
+    &.apos-area-widget-controls--add--top.apos-is-open--menu-top,
+    &.apos-area-widget-controls--add--bottom.apos-is-open--menu-bottom {
+      z-index: $z-index-area-schema-ui;
+    }
+  }
+
+  .apos-area-widget-controls--add {
+    &.apos-area-widget-controls--add--top.apos-is-open--menu-top,
+    &.apos-area-widget-controls--add--bottom.apos-is-open--menu-bottom {
+
+      /* stylelint-disable-next-line max-nesting-depth */
+      :deep(.apos-button__wrapper .apos-button:not([disabled])) {
+        @include showButton;
+      }
+    }
+  }
+
+  .apos-area-widget-controls--add {
+    :deep(.apos-button__wrapper) {
+      padding: 8px;
+
+      &:hover .apos-button:not([disabled]) {
+        @include showButton;
+      }
+    }
+
+    :deep(.apos-button__icon) {
+      margin-right: 0;
+    }
+
+    :deep(.apos-button__label) {
+      display: inline-block;
+      overflow: hidden;
+      font-size: var(--a-type-small);
+      transition: max-width 200ms var(--a-transition-timing-bounce);
+      max-width: 0;
+      max-height: 0;
+      white-space: nowrap;
+    }
+
+    :deep(.apos-button) {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 5px;
+      transition: all 200ms var(--a-transition-timing-bounce);
+      background-image: linear-gradient( 45deg, var(--a-primary), var(--a-primary-dark-15), var(--a-primary-light-40), var(--a-primary) );
+      background-size: 200% 100%;
+      border-radius: 12px;
+    }
   }
 
   .apos-area-widget-controls--add--bottom {
@@ -610,7 +762,7 @@ export default {
     transform: translate(-50%, 50%);
   }
 
-  .apos-area-widget-inner ::v-deep .apos-context-menu__popup.apos-is-visible {
+  .apos-area-widget-inner :deep(.apos-context-menu__popup.apos-is-visible) {
     top: calc(100% + 20px);
     left: 50%;
     transform: translate(-50%, 0);
@@ -618,10 +770,11 @@ export default {
 
   .apos-area-widget__label {
     position: absolute;
-    top: 1px;
+    top: 0;
     right: 0;
     display: flex;
     transform: translateY(-100%);
+    transition: opacity 300ms ease;
   }
 
   .apos-area-widget-inner .apos-area-widget-inner .apos-area-widget__label {
@@ -631,39 +784,60 @@ export default {
 
   .apos-area-widget__breadcrumbs {
     @include apos-list-reset();
-    display: flex;
-    align-items: center;
-    margin: 0;
-    padding: 2px;
-    background-color: var(--a-background-primary);
-    border: 1px solid var(--a-primary-dark-10);
-  }
 
-  .apos-area-widget-wrapper--foreign .apos-area-widget-inner .apos-area-widget__breadcrumbs {
-    background-color: var(--a-background-inverted);
-    & ::v-deep .apos-button__content {
-      color: var(--a-text-inverted);
+    & {
+      display: flex;
+      align-items: center;
+      margin: 0 0 8px;
+      padding: 4px 6px;
+      background-color: var(--a-background-primary);
+      border: 1px solid var(--a-primary-transparent-50);
+      border-radius: 8px;
     }
   }
 
   .apos-area-widget__breadcrumb,
-  .apos-area-widget__breadcrumb ::v-deep .apos-button__content {
+  .apos-area-widget__breadcrumb :deep(.apos-button__content) {
     @include type-help;
-    padding: 2px;
-    white-space: nowrap;
-    &:hover {
-      cursor: pointer;
+
+    & {
+      padding: 2px;
+      white-space: nowrap;
+      color: var(--a-base-1);
+      transition: background-color 300ms var(--a-transition-timing-bounce);
     }
+  }
+
+  .apos-area-widget__breadcrumbs:hover .apos-area-widget__breadcrumb,
+  .apos-area-widget__breadcrumbs:hover .apos-area-widget__breadcrumb :deep(.apos-button__content) {
+    color: var(--a-text-primary);
+  }
+
+  .apos-area-widget__breadcrumb--widget-icon {
+    margin-right: 2px;
+    padding: 3px 2px 2px;
+    color: var(--a-primary);
+    transition: background-color 300ms var(--a-transition-timing-bounce);
+    background-color: var(--a-primary-transparent-10);
+    border-radius: 4px;
+  }
+
+  .apos-area-widget__breadcrumbs:hover .apos-area-widget__breadcrumb--widget-icon {
+    background-color: var(--a-primary-transparent-25);
   }
 
   .apos-area-widget__breadcrumb--icon {
     padding: 2px;
+    color: var(--a-text-primary);
   }
 
-  .apos-area-widget__breadcrumb ::v-deep .apos-button {
+  .apos-area-widget__breadcrumb :deep(.apos-button) {
     color: var(--a-primary-dark-10);
+
     &:hover, &:active, &:focus {
-      text-decoration: none;
+      .apos-button__content {
+        color: var(--a-primary);
+      }
     }
   }
 

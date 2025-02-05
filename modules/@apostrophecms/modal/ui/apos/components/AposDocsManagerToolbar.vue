@@ -2,13 +2,16 @@
   <AposModalToolbar class-name="apos-manager-toolbar">
     <template #leftControls>
       <AposButton
-        v-if="displayedItems"
+        v-if="canSelectAll"
+        ref="selectAll"
         label="apostrophe:select"
         type="outline"
+        :modifiers="['small']"
         text-color="var(--a-base-1)"
         :icon-only="true"
         :icon="checkboxIcon"
-        @click="$emit('select-click')"
+        data-apos-test="selectAll"
+        @click="selectAll"
       />
       <div
         v-for="{
@@ -23,9 +26,10 @@
         <AposButton
           v-if="!operations"
           :label="label"
-          :icon-only="true"
+          :action="action"
           :icon="icon"
           :disabled="!checkedCount"
+          :modifiers="['small']"
           type="outline"
           @click="confirmOperation({ action, label, ...rest })"
         />
@@ -46,8 +50,10 @@
     <template #rightControls>
       <AposPager
         v-if="!options.noPager && totalPages !== 0"
-        @click="registerPageChange" @change="registerPageChange"
-        :total-pages="totalPages" :current-page="currentPage"
+        :total-pages="totalPages"
+        :current-page="currentPage"
+        @click="registerPageChange"
+        @change="registerPageChange"
       />
       <AposFilterMenu
         v-if="filters.length"
@@ -57,11 +63,15 @@
         @input="filter"
       />
       <AposInputString
-        v-if="!options.noSearch"
-        @input="search" @return="search($event, true)"
+        v-if="hasSearch"
+        ref="search"
         :field="searchField.field"
-        :status="searchField.status" :value="searchField.value"
+        :status="searchField.status"
+        :model-value="searchField.value"
         :modifiers="['small']"
+        :no-blur-emit="true"
+        @update:model-value="search"
+        @return="search($event)"
       />
     </template>
   </AposModalToolbar>
@@ -119,8 +129,20 @@ export default {
       type: Number,
       required: true
     },
+    checked: {
+      type: Array,
+      default: () => []
+    },
+    checkedTypes: {
+      type: Array,
+      default: null
+    },
     checkedCount: {
       type: Number,
+      required: true
+    },
+    moduleName: {
+      type: String,
       required: true
     }
   },
@@ -158,12 +180,45 @@ export default {
       } else {
         return 'checkbox-blank-icon';
       }
+    },
+    canSelectAll() {
+      return this.displayedItems;
+    },
+    canArchive() {
+      return this.checkedCount;
+    },
+    hasSearch() {
+      return !this.options.noSearch;
     }
   },
   mounted () {
     this.computeActiveOperations();
+    apos.bus.$on('command-menu-manager-select-all', this.selectAll);
+    apos.bus.$on('command-menu-manager-archive-selected', this.archiveSelected);
+    apos.bus.$on('command-menu-manager-focus-search', this.focusSearch);
+  },
+  unmounted () {
+    apos.bus.$off('command-menu-manager-select-all', this.selectAll);
+    apos.bus.$off('command-menu-manager-archive-selected', this.archiveSelected);
+    apos.bus.$off('command-menu-manager-focus-search', this.focusSearch);
   },
   methods: {
+    selectAll() {
+      if (this.canSelectAll) {
+        this.$emit('select-click');
+      }
+    },
+    archiveSelected() {
+      const [ archiveOperation ] = this.activeOperations.filter(operation => operation.action === 'archive');
+      if (archiveOperation && this.canArchive) {
+        this.confirmOperation(archiveOperation);
+      }
+    },
+    focusSearch() {
+      if (this.hasSearch) {
+        this.$refs.search.$el.querySelector('input').focus();
+      }
+    },
     computeActiveOperations () {
       if (this.isRelationship) {
         this.activeOperations = [];
@@ -207,16 +262,7 @@ export default {
         this.computeActiveOperations();
       }
     },
-    search(value, force) {
-      if ((force && !value) || value.data === '') {
-        value = {
-          data: '',
-          error: false
-        };
-      } else if (!value || value.error || (!force && value.data.length < 3)) {
-        return;
-      }
-
+    search(value) {
       this.$emit('search', value.data);
     },
     registerPageChange(pageNum) {
@@ -225,7 +271,17 @@ export default {
     async beginGroupedOperation(action, operations) {
       const operation = operations.find(o => o.action === action);
 
-      await this.confirmOperation(operation);
+      operation.modal ? await this.modalOperation(operation) : await this.confirmOperation(operation);
+    },
+    async modalOperation({
+      modal, ...rest
+    }) {
+      await apos.modal.execute(modal, {
+        checked: this.checked,
+        checkedTypes: this.checkedTypes,
+        moduleName: this.moduleName,
+        ...rest
+      });
     },
     async confirmOperation ({
       modalOptions = {}, action, operations, label, ...rest
@@ -267,7 +323,13 @@ export default {
 </script>
 
 <style lang="scss" scoped>
-  .apos-manager-toolbar ::v-deep .apos-field--search {
-    width: 250px;
+  .apos-manager-toolbar {
+    :deep(.apos-field--search) {
+      width: 250px;
+    }
+
+    :deep(.apos-input) {
+      height: 32px;
+    }
   }
 </style>

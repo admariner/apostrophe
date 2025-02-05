@@ -1,38 +1,45 @@
 <template>
-  <ul class="apos-admin-bar__items">
-    <li class="apos-admin-bar__item" v-if="pageTree">
+  <ol class="apos-admin-bar__items" role="menu">
+    <li v-if="pageTree" class="apos-admin-bar__item">
       <AposButton
-        type="subtle" label="apostrophe:pages"
+        type="subtle"
+        label="apostrophe:pages"
         class="apos-admin-bar__btn"
         :modifiers="['no-motion']"
+        role="menuitem"
         @click="emitEvent('@apostrophecms/page:manager')"
       />
     </li>
     <li
-      v-for="item in menuItems" :key="item.name"
+      v-for="item in menuItems"
+      :key="item.name"
       class="apos-admin-bar__item"
     >
       <AposContextMenu
-        v-if="item.items" class="apos-admin-bar__sub"
-        :menu="item.items" :button="{
+        v-if="item.items"
+        class="apos-admin-bar__sub"
+        :menu="item.items"
+        :button="{
           label: item.label,
           modifiers: ['no-motion'],
           class: 'apos-admin-bar__btn',
           type: 'subtle'
         }"
+        role="menuitem"
         @item-clicked="emitEvent"
       />
       <Component
-        v-else
         :is="item.options && item.options.component || 'AposButton'"
+        v-else
         type="subtle"
-        @click="emitEvent(item.action)"
         :label="item.label"
         :modifiers="['no-motion']"
         class="apos-admin-bar__btn"
+        role="menuitem"
+        @click="emitEvent(item.action)"
       />
     </li>
-    <li class="apos-admin-bar__item" v-if="createMenu.length > 0">
+    <li v-if="createMenu.length > 0" class="apos-admin-bar__item">
       <AposContextMenu
         class="apos-admin-bar__create"
         :menu="createMenu"
@@ -43,6 +50,7 @@
           type: 'primary',
           modifiers: ['round', 'no-motion']
         }"
+        role="menuitem"
         @item-clicked="emitEvent"
       />
     </li>
@@ -52,22 +60,27 @@
     >
       <template v-for="item in trayItems">
         <Component
-          v-if="item.options.component"
           :is="item.options.component"
-          :key="item.name"
+          v-if="item.options.component"
+          :key="`${item.name}.component`"
         />
         <AposButton
-          v-else :key="item.name"
-          type="subtle" :modifiers="['small', 'no-motion']"
-          :tooltip="trayItemTooltip(item)" class="apos-admin-bar__context-button"
-          :icon="item.options.icon" :icon-only="true"
+          v-else
+          :key="`${item.name}.fallback`"
+          type="subtle"
+          :modifiers="['small', 'no-motion']"
+          :tooltip="trayItemTooltip(item)"
+          class="apos-admin-bar__context-button"
+          :icon="item.options.icon"
+          :icon-only="true"
           :label="item.label"
+          :action="item.action"
           :state="trayItemState[item.name] ? [ 'active' ] : []"
           @click="emitEvent(item.action)"
         />
       </template>
     </li>
-  </ul>
+  </ol>
 </template>
 
 <script>
@@ -115,12 +128,12 @@ export default {
       });
     this.trayItems = itemsSet.filter(item => item.options && item.options.contextUtility);
 
-    Object.values(apos.modules).forEach(module => {
-      if (module.quickCreate) {
+    Object.values(apos.modules).forEach(apostropheModule => {
+      if (apostropheModule.quickCreate) {
         this.createMenu.push({
-          label: module.label || module.name,
-          name: module.name,
-          action: `${module.name}:editor`
+          label: apostropheModule.label || apostropheModule.name,
+          name: apostropheModule.name,
+          action: `${apostropheModule.name}:editor`
         });
       }
     });
@@ -167,6 +180,7 @@ export default {
 .apos-admin-bar__items {
   display: flex;
   flex-grow: 1;
+  line-height: var(--a-line-base);
   margin: 0;
   padding: 0;
 }
@@ -176,15 +190,15 @@ export default {
   align-items: center;
 }
 
-.apos-admin-bar__sub ::v-deep .apos-context-menu__btn {
+.apos-admin-bar__sub :deep(.apos-context-menu__btn) {
   border-radius: 0;
 }
 
-.apos-admin-bar__sub ::v-deep .apos-context-menu__popup {
+.apos-admin-bar__sub :deep(.apos-context-menu__popup) {
   top: calc(100% + 5px);
 }
 
-::v-deep .apos-admin-bar__create {
+:deep(.apos-admin-bar__create) {
   margin-left: 10px;
 
   .apos-context-menu__btn {

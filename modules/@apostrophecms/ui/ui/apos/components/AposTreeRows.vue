@@ -1,133 +1,135 @@
 <template>
-  <VueDraggable
-    tag="ol"
+  <draggable
+    item-key="_id"
     class="apos-tree__list"
-    :list="myRows"
-    v-bind="dragOptions"
+    tag="ol"
+    :list="rows"
+    :options="dragOptions"
     @start="startDrag"
     @end="endDrag"
   >
-    <li
-      v-for="row in myRows" :key="row._id"
-      :data-row-id="row._id" data-apos-tree-row
-      :class="getRowClasses(row)"
-      :aria-role="options.selectable ? 'button' : null"
-      :tabindex="options.selectable ? 0 : null"
-      v-on="options.selectable ? {
-        'click': selectRow,
-        'keydown': keydownRow
-      } : {}"
-    >
-      <div class="apos-tree__row-data">
-        <button
-          v-if="row._children && row._children.length > 0"
-          class="apos-tree__row__toggle" data-apos-tree-toggle
-          :aria-label="$t('apostrophe:toggleSection')" :aria-expanded="!options.startCollapsed"
-          @click="toggleSection($event)"
-        >
-          <AposIndicator
-            icon="chevron-down-icon"
-            class="apos-tree__row__toggle-icon"
-          />
-        </button>
-        <component
-          v-for="(col, index) in headers"
-          :key="`${col.property}-${index}`"
-          :is="getEffectiveType(col, row)"
-          :draft="row"
-          :published="row._publishedDoc"
-          :header="col"
-          :href="(getEffectiveType(col, row) === 'a') ? row[col.property] : false"
-          :target="col.type === 'link' ? '_blank' : false"
-          :class="getCellClasses(col, row)"
-          :disabled="getCellDisabled(col, row)"
-          :data-col="col.property"
-          :style="getCellStyles(col.property, index)"
-          @click="((getEffectiveType(col, row) === 'button') && col.action) ? $emit(col.action, row._id) : null"
-        >
-          <AposIndicator
-            v-if="options.draggable && index === 0 && !row.parked"
-            icon="drag-icon"
-            class="apos-tree__row__icon apos-tree__row__icon--handle"
-          />
-          <AposIndicator
-            v-if="index === 0 && row.parked && row.type !== '@apostrophecms/archive-page'"
-            icon="lock-icon"
-            class="apos-tree__row__icon apos-tree__row__icon--parked"
-            tooltip="apostrophe:pageIsParked"
-          />
-          <AposIndicator
-            v-if="index === 0 && row.type === '@apostrophecms/archive-page'"
-            icon="lock-icon"
-            class="apos-tree__row__icon apos-tree__row__icon--parked"
-            tooltip="apostrophe:cannotMoveArchive"
-          />
-          <AposCheckbox
-            v-if="options.bulkSelect && index === 0"
-            class="apos-tree__row__checkbox"
-            tabindex="-1"
-            :field="{
-              name: row._id,
-              hideLabel: true,
-              label: {
-                key: 'apostrophe:toggleSelectionOf',
-                title: row.title
-              },
-              disableFocus: true
-            }"
-            :choice="{ value: row._id }"
-            v-model="checkedProxy"
-          />
-          <span class="apos-tree__cell__value">
+    <template #item="{element: row}">
+      <li
+        :data-row-id="row._id"
+        data-apos-tree-row
+        :class="getRowClasses(row)"
+        :aria-role="options.selectable ? 'button' : null"
+        :tabindex="options.selectable ? 0 : null"
+        v-on="options.selectable ? {
+          'click': selectRow,
+          'keydown': keydownRow
+        } : {}"
+      >
+        <div class="apos-tree__row-data">
+          <button
+            v-if="row._children && row._children.length > 0"
+            class="apos-tree__row__toggle"
+            data-apos-tree-toggle
+            :aria-label="$t('apostrophe:toggleSection')"
+            :aria-expanded="!options.startCollapsed"
+            @click="toggleSection($event)"
+          >
             <AposIndicator
-              v-if="getEffectiveIcon(col, row)"
-              :icon="getEffectiveIcon(col, row)"
-              class="apos-tree__cell__icon"
-              :icon-size="getEffectiveIconSize(col, row)"
+              icon="chevron-down-icon"
+              class="apos-tree__row__toggle-icon"
             />
-            <span class="apos-tree__cell__label" v-if="getEffectiveCellLabel(col, row)">
-              {{ getEffectiveCellLabel(col, row) }}
+          </button>
+          <component
+            :is="getEffectiveType(col, row)"
+            v-for="(col, index) in headers"
+            :key="`${col.property}-${index}`"
+            :draft="row"
+            :published="row._publishedDoc"
+            :header="col"
+            :href="(getEffectiveType(col, row) === 'a') ? row[col.property] : false"
+            :target="col.type === 'link' ? '_blank' : false"
+            :class="getCellClasses(col, row)"
+            :disabled="getCellDisabled(col, row)"
+            :data-col="col.property"
+            :style="getCellStyles(col.property, index)"
+            :options="moduleOptions"
+            @click="((getEffectiveType(col, row) === 'button') && col.action) ? $emit(col.action, row._id) : null"
+          >
+            <AposIndicator
+              v-if="options.draggable && index === 0 && !row.parked"
+              icon="drag-icon"
+              class="apos-tree__row__icon apos-tree__row__icon--handle"
+            />
+            <AposIndicator
+              v-if="index === 0 && row.parked && row.type !== '@apostrophecms/archive-page'"
+              icon="lock-icon"
+              class="apos-tree__row__icon apos-tree__row__icon--parked"
+              tooltip="apostrophe:pageIsParked"
+            />
+            <AposIndicator
+              v-if="index === 0 && row.type === '@apostrophecms/archive-page'"
+              icon="lock-icon"
+              class="apos-tree__row__icon apos-tree__row__icon--parked"
+              tooltip="apostrophe:cannotMoveArchive"
+            />
+            <AposCheckbox
+              v-if="options.bulkSelect && index === 0"
+              v-model="checkedProxy"
+              class="apos-tree__row__checkbox"
+              :field="{
+                name: row._id,
+                hideLabel: true,
+                label: $t({
+                  key: 'apostrophe:toggleSelectionOf',
+                  title: row.title
+                }),
+                readOnly: maxReached && !checked.includes(row._id)
+              }"
+              :choice="{ value: row._id }"
+            />
+            <span class="apos-tree__cell__value">
+              <AposIndicator
+                v-if="getEffectiveIcon(col, row)"
+                :icon="getEffectiveIcon(col, row)"
+                class="apos-tree__cell__icon"
+                :icon-size="getEffectiveIconSize(col, row)"
+              />
+              <span v-if="getEffectiveCellLabel(col, row)" class="apos-tree__cell__label">
+                {{ getEffectiveCellLabel(col, row) }}
+              </span>
             </span>
-          </span>
-        </component>
-      </div>
-      <AposTreeRows
-        data-apos-branch-height
-        :data-list-row="row._id"
-        ref="tree-branches"
-        :rows="row._children"
-        :headers="headers"
-        :icons="icons"
-        :col-widths="colWidths"
-        :level="level + 1"
-        :nested="nested"
-        :list-id="row._id"
-        :tree-id="treeId"
-        :options="options"
-        :class="{ 'apos-is-collapsed': options.startCollapsed }"
-        :style="{
-          'max-height': options.startCollapsed ? '0' : null
-        }"
-        @update="$emit('update', $event)"
-        v-model="checkedProxy"
-      />
-    </li>
-  </VueDraggable>
+          </component>
+        </div>
+        <AposTreeRows
+          :ref="(el) => treeBranches.push(el)"
+          v-model:checked="checkedProxy"
+          data-apos-branch-height
+          :data-list-row="row._id"
+          :rows="row._children"
+          :headers="headers"
+          :icons="icons"
+          :col-widths="colWidths"
+          :level="level + 1"
+          :nested="nested"
+          :list-id="row._id"
+          :tree-id="treeId"
+          :options="options"
+          :class="{ 'apos-is-collapsed': options.startCollapsed }"
+          :style="{
+            'max-height': options.startCollapsed ? '0' : null
+          }"
+          :module-options="moduleOptions"
+          @update="$emit('update', $event)"
+        />
+      </li>
+    </template>
+  </draggable>
 </template>
 
 <script>
-import VueDraggable from 'vuedraggable';
+import { Sortable } from 'sortablejs-vue3';
 
 export default {
   name: 'AposTreeRows',
   components: {
-    VueDraggable
+    draggable: Sortable
   },
   // Custom model to handle the v-model connection on the parent.
-  model: {
-    prop: 'checked',
-    event: 'change'
-  },
   props: {
     headers: {
       type: Array,
@@ -179,34 +181,44 @@ export default {
     treeId: {
       type: String,
       required: true
+    },
+    moduleOptions: {
+      type: Object,
+      default() {
+        return {};
+      }
     }
   },
-  emits: [ 'update', 'change' ],
+  emits: [ 'update', 'update:checked', 'change' ],
+  data() {
+    return {
+      treeBranches: []
+    };
+  },
   computed: {
-    myRows() {
-      return this.rows;
-    },
     // Handle the local check state within this component.
     checkedProxy: {
       get() {
         return this.checked;
       },
       set(val) {
-        this.$emit('change', val);
+        this.$emit('update:checked', val);
       }
-    },
-    isOpen() {
-      return true;
     },
     dragOptions() {
       return {
-        group: { name: this.treeId },
+        group: this.treeId,
+        fallbackOnBody: true,
+        swapThreshold: 0.65,
         dataListId: this.listId,
         disabled: !this.options.draggable,
         handle: '.apos-tree__row__icon--handle',
         ghostClass: 'apos-is-dragging',
         filter: '.apos-is-parked'
       };
+    },
+    maxReached() {
+      return this.options.max != null && this.checked.length >= this.options.max;
     }
   },
   mounted() {
@@ -220,7 +232,7 @@ export default {
   },
   methods: {
     setHeights() {
-      this.$refs['tree-branches'].forEach(branch => {
+      this.treeBranches.forEach(branch => {
         // Add padding to the max-height to avoid needing a `resize`
         // event listener updating values.
         const height = branch.$el.clientHeight + 20;
@@ -232,7 +244,7 @@ export default {
     endDrag(event) {
       this.$emit('update', event);
       this.$nextTick(() => {
-        if (!this.$refs['tree-branches']) {
+        if (!this.treeBranches.length) {
           return;
         }
         this.setHeights();
@@ -438,8 +450,9 @@ export default {
       opacity: 0.5;
     }
   }
+
   .apos-tree__list {
-    transition: max-height 0.3s ease;
+    transition: max-height 300ms ease;
 
     &.apos-is-collapsed {
       overflow-y: auto;
@@ -449,6 +462,7 @@ export default {
   .apos-tree__row--selectable {
     cursor: pointer;
   }
+
   .apos-tree__row-data {
     .apos-tree__row--selected > & {
       background-color: var(--a-base-9);
@@ -467,7 +481,7 @@ export default {
       content: '';
       background-color: var(--a-base-8);
       width: 1px;
-      transition: background-color 0.3s ease;
+      transition: background-color 300ms ease;
     }
 
     &.apos-is-collapsed::before {
@@ -477,19 +491,22 @@ export default {
 
   .apos-tree__row__toggle {
     @include apos-button-reset();
-    position: absolute;
-    top: 50%;
-    left: -(math.div($row-nested-h-padding, 2));
-    background-color: var(--a-background-primary);
-    transform: translate(-50%, -50%);
+
+    & {
+      position: absolute;
+      top: 50%;
+      left: -(math.div($row-nested-h-padding, 2));
+      background-color: var(--a-background-primary);
+      transform: translate(-50%, -50%);
+    }
   }
 
   .apos-tree__row__toggle-icon {
     display: block;
-    transition: transform 0.3s ease;
+    transition: transform 300ms ease;
     transform: rotate(-90deg) translateY(0.25em);
 
-    [aria-expanded=true] > & {
+    [aria-expanded="true"] > & {
       transform: none;
     }
   }
@@ -497,19 +514,21 @@ export default {
   .apos-tree__row__icon {
     margin-right: 0.25em;
 
-    ::v-deep .material-design-icon__svg {
-      transition: fill 0.2s ease;
+    :deep(.material-design-icon__svg) {
+      transition: fill 200ms ease;
       fill: var(--a-base-5);
     }
   }
 
   .apos-tree__row__icon--handle {
     cursor: grab;
+
     &:active {
       cursor: grabbing;
     }
-    .sortable-chosen & ::v-deep .material-design-icon__svg,
-    &:hover ::v-deep .material-design-icon__svg {
+
+    .sortable-chosen &:deep(.material-design-icon__svg,)
+    &:hover :deep(.material-design-icon__svg) {
       fill: var(--a-base-2);
     }
   }
@@ -551,14 +570,17 @@ export default {
     align-self: center;
   }
 
-  .apos-tree__cell.apos-is-published ::v-deep .apos-tree__cell__icon {
+  .apos-tree__cell.apos-is-published :deep(.apos-tree__cell__icon) {
     color: var(--a-success);
   }
 
-  button.apos-tree__cell {
+  button.apos-tree__cell { /* stylelint-disable-line selector-no-qualifying-type */
     @include apos-button-reset();
-    padding: $cell-padding;
-    border-bottom: 1px solid var(--a-base-8);
+
+    & {
+      padding: $cell-padding;
+      border-bottom: 1px solid var(--a-base-8);
+    }
   }
 
 </style>

@@ -9,12 +9,13 @@
         <component
           :is="map[set.field.type]"
           :field="set.field"
-          :value="set.value"
+          :model-value="set.value"
           :status="set.status"
           :icon="
             set.field.type === 'select' ? 'unfold-more-horizontal-icon' : ''
           "
-          @input="input($event, set.name)"
+          :no-blur-emit="true"
+          @update:model-value="input($event, set.name)"
         />
       </div>
     </div>
@@ -48,7 +49,7 @@ export default {
         return {
           label: 'apostrophe:filter',
           icon: 'chevron-down-icon',
-          modifiers: [ 'icon-right' ],
+          modifiers: [ 'icon-right', 'small' ],
           type: 'outline'
         };
       }
@@ -110,7 +111,7 @@ export default {
         // Still pending
         return [
           {
-            label: 'Loading Choices...',
+            label: 'apostrophe:filterMenuLoadingChoices',
             value: filter.def
           }
         ];
@@ -133,7 +134,7 @@ export default {
 .apos-filters-menu {
   min-width: 140px;
 
-  ::v-deep .apos-input--select {
+  :deep(.apos-input--select) {
     padding-top: 10px;
     padding-bottom: 10px;
     background-color: var(--a-base-10);
@@ -141,17 +142,18 @@ export default {
   }
 }
 
-.apos-filters-menu ::v-deep .apos-field__label {
+.apos-filters-menu :deep(.apos-field__label) {
   display: block;
   width: 100%;
+  margin-bottom: 10px;
   padding-bottom: 10px;
   border-bottom: 1px solid var(--a-base-9);
   color: var(--a-base-3);
-  margin-bottom: 10px;
 }
 
 .apos-filters-menu__set {
   margin-bottom: 30px;
+
   &:last-child {
     margin-bottom: 0;
   }

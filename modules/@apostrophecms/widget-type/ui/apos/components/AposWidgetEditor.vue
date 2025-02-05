@@ -1,13 +1,22 @@
 <template>
   <AposModal
     class="apos-widget-editor"
-    :modal="modal" :modal-title="editLabel"
-    @inactive="modal.active = false" @show-modal="modal.showModal = true"
-    @esc="confirmAndCancel" @no-modal="$emit('safe-close')"
+    :modal="modal"
+    :modal-title="editLabel"
+    @inactive="modal.active = false"
+    @show-modal="modal.showModal = true"
+    @esc="confirmAndCancel"
   >
     <template #breadcrumbs>
-      <AposModalBreadcrumbs
-        v-if="breadcrumbs && breadcrumbs.length" :items="breadcrumbs"
+      <AposModalBreadcrumbs v-if="breadcrumbs && breadcrumbs.length" :items="breadcrumbs" />
+      <AposWidgetModalTabs
+        v-if="tabs.length && tabs[0].name !== 'ungrouped'"
+        :key="tabKey"
+        :current="currentTab"
+        :tabs="tabs"
+        orientation="horizontal"
+        :errors="fieldErrors"
+        @select-tab="switchPane"
       />
     </template>
     <template #main>
@@ -15,14 +24,20 @@
         <template #bodyMain>
           <div class="apos-widget-editor__body">
             <AposSchema
+              v-for="tab in tabs"
+              v-show="tab.name === currentTab"
+              :key="tab.name"
+              :ref="tab.name"
+              :data-apos-test="`schema:${tab.name}`"
               :trigger-validation="triggerValidation"
-              :schema="schema"
-              :value="docFields"
-              @input="updateDocFields"
-              @validate="triggerValidate"
+              :current-fields="groups[tab.name].fields"
+              :schema="groups[tab.name].schema"
+              :model-value="docFields"
+              :meta="meta"
               :following-values="followingValues()"
-              :conditional-fields="conditionalFields()"
-              ref="schema"
+              :conditional-fields="conditionalFields"
+              @update:model-value="updateDocFields"
+              @validate="triggerValidate"
             />
           </div>
         </template>
@@ -30,13 +45,15 @@
     </template>
     <template #footer>
       <AposButton
-        type="default" label="apostrophe:cancel"
+        type="default"
+        label="apostrophe:cancel"
         @click="confirmAndCancel"
       />
       <AposButton
-        type="primary" @click="save"
+        type="primary"
         :label="saveLabel"
-        :disabled="docFields.hasErrors"
+        :disabled="errorCount > 0"
+        @click="save"
       />
     </template>
   </AposModal>
@@ -45,13 +62,16 @@
 <script>
 import AposModifiedMixin from 'Modules/@apostrophecms/ui/mixins/AposModifiedMixin';
 import AposEditorMixin from 'Modules/@apostrophecms/modal/mixins/AposEditorMixin';
+import AposDocErrorsMixin from 'Modules/@apostrophecms/modal/mixins/AposDocErrorsMixin';
+import AposModalTabsMixin from 'Modules/@apostrophecms/modal/mixins/AposModalTabsMixin';
 import { detectDocChange } from 'Modules/@apostrophecms/schema/lib/detectChange';
-import cuid from 'cuid';
+import { createId } from '@paralleldrive/cuid2';
 import { klona } from 'klona';
+import newInstance from 'apostrophe/modules/@apostrophecms/schema/lib/newInstance.js';
 
 export default {
   name: 'AposWidgetEditor',
-  mixins: [ AposModifiedMixin, AposEditorMixin ],
+  mixins: [ AposModifiedMixin, AposEditorMixin, AposDocErrorsMixin, AposModalTabsMixin ],
   props: {
     type: {
       required: true,
@@ -67,8 +87,14 @@ export default {
       required: true,
       type: Object
     },
-    value: {
+    modelValue: {
       required: false,
+      type: Object,
+      default() {
+        return {};
+      }
+    },
+    meta: {
       type: Object,
       default() {
         return {};
@@ -77,21 +103,30 @@ export default {
     focused: {
       type: Boolean,
       default: false
+    },
+    parentFollowingValues: {
+      type: Object,
+      default: null
     }
   },
-  emits: [ 'safe-close', 'modal-result' ],
+  emits: [ 'modal-result' ],
   data() {
+    const moduleOptions = window.apos.modules[apos.area.widgetManagers[this.type]];
+
     return {
-      id: this.value && this.value._id,
+      id: this.modelValue && this.modelValue._id,
       original: null,
       docFields: {
-        data: { ...this.value },
+        data: {},
         hasErrors: false
       },
+      fieldErrors: {},
       modal: {
         title: this.editLabel,
         active: false,
         type: 'slide',
+        width: moduleOptions.width,
+        origin: moduleOptions.origin,
         showModal: false
       },
       triggerValidation: false
@@ -132,27 +167,53 @@ export default {
     }
   },
   async mounted() {
+    this.modal.active = true;
+    await this.evaluateExternalConditions();
+    this.evaluateConditions();
     apos.area.widgetOptions = [
       klona(this.options),
       ...apos.area.widgetOptions
     ];
-    this.modal.active = true;
   },
-  destroyed() {
+  unmounted() {
     apos.area.widgetOptions = apos.area.widgetOptions.slice(1);
   },
   created() {
-    this.original = this.value ? klona(this.value) : this.getDefault();
+    const defaults = this.getDefault();
+
+    if (this.modelValue) {
+      this.original = klona(this.modelValue);
+      this.docFields.data = {
+        ...defaults,
+        ...this.modelValue
+      };
+      return;
+    }
+
+    this.original = klona(defaults);
+    this.docFields.data = defaults;
   },
   methods: {
     updateDocFields(value) {
-      this.docFields = value;
+      this.updateFieldErrors(value.fieldState);
+      this.docFields.data = {
+        ...this.docFields.data,
+        ...value.data
+      };
+      this.evaluateConditions();
     },
     async save() {
       this.triggerValidation = true;
       this.$nextTick(async () => {
-        if (this.docFields.hasErrors) {
+        const widget = klona(this.docFields.data);
+        if (this.errorCount > 0) {
           this.triggerValidation = false;
+          await apos.notify('apostrophe:resolveErrorsBeforeSaving', {
+            type: 'warning',
+            icon: 'alert-circle-icon',
+            dismiss: true
+          });
+          this.focusNextError();
           return;
         }
         try {
@@ -163,30 +224,22 @@ export default {
           });
           return;
         }
-        const widget = this.docFields.data;
         if (!widget.type) {
           widget.type = this.type;
         }
         if (!this.id) {
-          widget._id = cuid();
+          widget._id = createId();
         }
         this.$emit('modal-result', widget);
         this.modal.showModal = false;
       });
     },
     getDefault() {
-      const widget = {};
-      this.schema.forEach(field => {
-        widget[field.name] = field.def ? klona(field.def) : field.def;
-      });
-      return widget;
+      return newInstance(this.schema);
+    },
+    getAposSchema(field) {
+      return this.$refs[field.group.name][0];
     }
   }
 };
 </script>
-
-<style lang="scss" scoped>
-  .apos-widget-editor ::v-deep .apos-modal__inner {
-    max-width: 458px;
-  }
-</style>

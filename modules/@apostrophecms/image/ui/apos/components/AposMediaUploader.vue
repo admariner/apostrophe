@@ -1,13 +1,20 @@
 <template>
   <label
-    :class="dropzoneClasses"
-    :disabled="disabled"
+    class="apos-media-manager-display__cell apos-media-uploader"
+    :class="{'apos-media-uploader--enabled': !disabled}"
+    :disabled="disabled ? disabled : null"
     @drop.prevent="uploadMedia"
     @dragover.prevent=""
     @dragenter="incrementDragover"
     @dragleave="decrementDragover"
   >
-    <div class="apos-media-uploader__inner">
+    <div
+      class="apos-media-uploader__inner"
+      :class="{'apos-is-dragging': dragover}"
+      tabindex="0"
+      data-apos-focus-priority
+      @keydown="onUploadDragAndDropKeyDown"
+    >
       <AposCloudUploadIcon
         class="apos-media-uploader__icon"
       />
@@ -24,12 +31,14 @@
       </div>
     </div>
     <input
-      type="file" class="apos-sr-only"
       ref="upload"
-      @input="uploadMedia"
+      type="file"
+      class="apos-sr-only"
       :accept="accept"
       multiple="true"
       :disabled="disabled"
+      tabindex="-1"
+      @input="uploadMedia"
     >
   </label>
 </template>
@@ -44,7 +53,7 @@ export default {
     },
     disabled: {
       type: Boolean,
-      required: false
+      default: false
     },
     accept: {
       type: String,
@@ -64,17 +73,20 @@ export default {
     };
   },
   computed: {
-    dropzoneClasses () {
-      return [
-        'apos-media-manager-display__cell',
-        'apos-media-uploader',
-        {
-          'apos-is-dragging': this.dragover
-        }
-      ].concat(this.disabled ? [] : [ 'apos-media-uploader--enabled' ]);
-    }
+
+  },
+  mounted() {
+    apos.bus.$on('command-menu-manager-create-new', this.create);
+  },
+  unmounted() {
+    apos.bus.$off('command-menu-manager-create-new', this.create);
   },
   methods: {
+    create() {
+      if (!this.disabled) {
+        this.$refs.upload.click();
+      }
+    },
     incrementDragover() {
       this.dragoverCount++;
       this.dragover = this.dragoverCount > 0;
@@ -125,9 +137,11 @@ export default {
         for (const file of files) {
           try {
             const img = await this.insertImage(file, emptyDoc);
-            imageIds.push(img._id);
+            if (img?._id) {
+              imageIds.push(img._id);
+            }
           } catch (e) {
-            const msg = e.body && e.body.message ? e.body.message : this.$t('Upload error');
+            const msg = e.body && e.body.message ? e.body.message : this.$t('apostrophe:uploadError');
             await apos.notify(msg, {
               type: 'danger',
               icon: 'alert-circle-icon',
@@ -211,6 +225,20 @@ export default {
           });
         }
       }
+    },
+    // Trigger the file input click (via `this.create`) when pressing Enter or Space
+    // of the drag&drop area, which is made focusable unlike the input file.
+    onUploadDragAndDropKeyDown(e) {
+      const isEnterPressed = e.key === 'Enter' || e.code === 'Enter' || e.code === 'NumpadEnter';
+      const isSpaceBarPressed = e.keyCode === 32 || e.code === 'Space';
+
+      if (isSpaceBarPressed) {
+        e.preventDefault();
+      }
+
+      if (isEnterPressed || isSpaceBarPressed) {
+        this.create();
+      }
     }
   }
 };
@@ -219,76 +247,82 @@ export default {
 <style lang="scss" scoped>
   .apos-media-uploader {
     @include apos-button-reset();
-    box-sizing: border-box;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    border: 2px dashed var(--a-base-3);
-    grid-column: 1 / 3;
-    grid-row: 1 / 3;
     @include apos-transition();
-    color: inherit;
+
+    & {
+      display: flex;
+      box-sizing: border-box;
+      align-items: center;
+      justify-content: center;
+      border: 2px dashed var(--a-base-3);
+      color: inherit;
+      grid-column: 1 / 3;
+      grid-row: 1 / 3;
+    }
   }
-  .apos-media-uploader--enabled {
+
+  .apos-media-uploader--enabled .apos-media-uploader__inner {
     &::after {
-      z-index: $z-index-under;
-      position: absolute;
-      content: '';
-      width: 90%;
-      height: 90%;
-      background-image:
-        linear-gradient(to right, rgba($brand-magenta, 0.3), rgba($brand-blue, 0.3)),
-        linear-gradient(to right, rgba($brand-gold, 0.3), rgba($brand-magenta, 0.3));
-      background-size:
-        100% 60%,
-        100% 60%;
-      background-position:
-        5% -5%,
-        5% 100%;
-      background-repeat: no-repeat;
-      filter: blur(10px);
       @include apos-transition($duration: 0.3s);
+
+      & {
+        z-index: $z-index-under;
+        position: absolute;
+        content: '';
+        width: 90%;
+        height: 90%;
+        background-image:
+          linear-gradient(to right, rgba($brand-magenta, 0.3), rgba($brand-blue, 0.3)),
+          linear-gradient(to right, rgba($brand-gold, 0.3), rgba($brand-magenta, 0.3));
+        background-size:
+          100% 60%,
+          100% 60%;
+        background-position:
+          5% -5%,
+          5% 100%;
+        background-repeat: no-repeat;
+        filter: blur(10px);
+      }
     }
 
     &:hover,
     &:active,
     &:focus,
     &.apos-is-dragging {
-      border-width: 0;
+      outline: 2px dashed var(--a-primary);
 
       &::after {
         width: 102%;
         height: 102%;
       }
+
       .apos-media-uploader__icon {
-        fill: url(#apos-upload-gradient);
+        fill: url("#apos-upload-gradient");
         transform: translateY(-2px);
       }
-    }
-
-    &:active,
-    &:focus {
-      outline: 1px solid var(--a-primary);
     }
   }
 
   .apos-media-uploader__inner {
     display: flex;
-    width: 100%;
-    height: 100%;
     flex-direction: column;
     align-items: center;
     justify-content: center;
+    width: 100%;
+    height: 100%;
     background-color: var(--a-background-primary);
   }
 
   .apos-media-uploader__icon {
-    width: 57px;
-    max-width: 50%;
-    height: auto;
-    margin-bottom: 5px;
-    fill: var(--a-text-primary);
     @include apos-transition($duration: 0.2s);
+
+    & {
+      width: 57px;
+      max-width: 50%;
+      height: auto;
+      margin-bottom: 5px;
+      fill: var(--a-text-primary);
+    }
   }
 
   .apos-media-uploader__instructions {
@@ -298,14 +332,22 @@ export default {
   .apos-media-uploader__primary,
   .apos-media-uploader__secondary {
     @include apos-p-reset();
-    text-align: center;
+
+    & {
+      text-align: center;
+    }
   }
+
   .apos-media-uploader__secondary {
     @include type-small;
   }
+
   .apos-media-uploader__primary {
     @include type-large;
-    max-width: 100px;
-    margin: 5px auto 10px;
+
+    & {
+      max-width: 100px;
+      margin: 5px auto 10px;
+    }
   }
 </style>

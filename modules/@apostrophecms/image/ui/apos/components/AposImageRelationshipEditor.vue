@@ -6,7 +6,6 @@
     @inactive="modal.active = false"
     @show-modal="modal.showModal = true"
     @esc="confirmAndCancel"
-    @no-modal="$emit('safe-close')"
   >
     <template #secondaryControls>
       <AposButton
@@ -20,13 +19,14 @@
         type="primary"
         label="apostrophe:update"
         :disabled="docFields.hasErrors"
+        :attrs="{'data-apos-focus-priority': true}"
         @click="submit"
       />
     </template>
     <template #leftRail>
       <AposModalRail>
         <div class="apos-schema">
-          <div class="apos-field">
+          <div class="apos-field" data-apos-field="aspectRatio">
             <label class="apos-field__label">
               {{ $t('apostrophe:aspectRatio') }}
               <AposIndicator
@@ -38,6 +38,7 @@
               />
             </label>
             <AposSelect
+              :selected="aspectRatio"
               :choices="aspectRatios"
               :disabled="disableAspectRatio"
               @change="updateAspectRatio"
@@ -59,32 +60,32 @@
             }}
           </div>
           <div class="apos-schema__aligned-fields">
-            <div class="apos-field">
+            <div class="apos-field" data-apos-field="width">
               <label class="apos-field__label apos-field__label--aligned">
                 W
               </label>
               <input
                 :value="docFields.data.width"
-                @input="inputWidth"
-                @blur="blurInput"
                 class="apos-input apos-input--text"
                 type="number"
                 :min="minWidth"
                 :max="maxWidth"
+                @input="inputWidth"
+                @blur="blurInput"
               >
             </div>
-            <div class="apos-field">
+            <div class="apos-field" data-apos-field="height">
               <label class="apos-field__label apos-field__label--aligned">
                 H
               </label>
               <input
                 :value="docFields.data.height"
-                @input="inputHeight"
-                @blur="blurInput"
                 class="apos-input apos-input--text"
                 type="number"
                 :min="minHeight"
                 :max="maxHeight"
+                @input="inputHeight"
+                @blur="blurInput"
               >
             </div>
           </div>
@@ -94,7 +95,6 @@
     <template #main>
       <div ref="cropperContainer" class="apos-image-cropper__container">
         <AposImageCropper
-          v-if="containerHeight"
           :attachment="item.attachment"
           :doc-fields="docFields"
           :aspect-ratio="aspectRatio"
@@ -122,7 +122,7 @@ export default {
       type: Array,
       default: () => ([])
     },
-    value: {
+    modelValue: {
       type: Object,
       default: null
     },
@@ -135,13 +135,13 @@ export default {
       default: () => ({})
     }
   },
-  emits: [ 'modal-result', 'safe-close' ],
+  emits: [ 'modal-result' ],
   data() {
     const { aspectRatio, disableAspectRatio } = this.getAspectRatioFromConfig();
     const minSize = this.getMinSize();
 
     return {
-      original: this.value,
+      original: this.modelValue,
       docFields: {
         data: this.setDataValues()
       },
@@ -444,14 +444,14 @@ export default {
 
 .apos-schema__aligned-fields {
   display: flex;
-  justify-content: space-between;
   flex-direction: row;
+  justify-content: space-between;
 
   .apos-field {
     position: relative;
     display: flex;
-    align-items: center;
     flex-grow: 1;
+    align-items: center;
 
     &:first-child {
       margin-right: 10px;
@@ -462,8 +462,8 @@ export default {
     }
 
     .apos-input {
-      margin-top: 0;
       flex-grow: 1;
+      margin-top: 0;
     }
 
     .apos-input:focus {
@@ -478,8 +478,11 @@ export default {
 
 .apos-field__min-size {
   @include type-small;
-  color: var(--a-base-1);
-  margin-bottom: 10px;
+
+  & {
+    margin-bottom: 10px;
+    color: var(--a-base-1);
+  }
 
   &--correcting {
     color: var(--a-primary);
@@ -488,10 +491,13 @@ export default {
 
 .apos-field__label {
   @include type-label;
-  display: block;
-  margin: 0 0 $spacing-base;
-  padding: 0;
-  color: var(--a-text-primary);
+
+  & {
+    display: block;
+    margin: 0 0 $spacing-base;
+    padding: 0;
+    color: var(--a-text-primary);
+  }
 }
 
 .apos-field__label--aligned {
@@ -500,11 +506,11 @@ export default {
 
 .apos-image-cropper__container {
   display: flex;
-  justify-content: center;
+  box-sizing: border-box;
   align-items: center;
+  justify-content: center;
   // We remove the modal's paddings - header height - container margin
   height: calc(100vh - 40px - 75px - 60px);
   margin: 30px 10%;
-  box-sizing: border-box;
 }
 </style>

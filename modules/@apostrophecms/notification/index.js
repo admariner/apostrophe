@@ -1,6 +1,6 @@
 // This module provides a framework for triggering notifications
 // within the Apostrophe admin UI. Notifications may be triggered
-// either on the browser or the server side, via `apos.notice`.
+// either on the browser or the server side, via `apos.notify`.
 //
 // ## Options
 //
@@ -92,12 +92,14 @@ module.exports = {
     async post(req) {
       const type = self.apos.launder.select(req.body.type, [
         'danger',
+        'error',
         'warning',
         'success',
         'info'
       ], 'info');
       const icon = self.apos.launder.string(req.body.icon);
       const message = self.apos.launder.string(req.body.message);
+      const classes = self.apos.launder.strings(req.body.classes);
       const interpolate = launderInterpolate(req.body.interpolate);
       const dismiss = self.apos.launder.integer(req.body.dismiss);
       let buttons = req.body.buttons;
@@ -117,6 +119,7 @@ module.exports = {
         }));
       }
       return self.trigger(req, message, {
+        classes,
         interpolate,
         dismiss,
         icon,
@@ -143,10 +146,15 @@ module.exports = {
     put(req, _id) {
       throw self.apos.error('unimplemented');
     },
-    patch(req, _id) {
+    async patch(req, _id) {
       const dismissed = self.apos.launder.boolean(req.body.dismissed);
       if (dismissed) {
-        return self.db.updateOne({ _id }, {
+        await self.emit('beforeSave', req, {
+          _id,
+          dismissed
+        });
+
+        await self.db.updateOne({ _id }, {
           $set: {
             dismissed
           },
@@ -156,8 +164,8 @@ module.exports = {
         });
       }
     },
-    delete(req, _id) {
-      return self.db.deleteMany({ _id });
+    async delete(req, _id) {
+      await self.db.deleteMany({ _id });
     }
   }),
   apiRoutes(self) {
@@ -201,17 +209,17 @@ module.exports = {
           action: self.action
         };
       },
-      // Call with `req`, then a message key as found in the localization files,
-      // followed by an `options` object if desired.
-      //
-      // If you do not have a `req` it is acceptable to pass a user `_id` string
+      // When used server-side, call with `req` as the first argument,
+      // or if you do not have a `req` it is acceptable to pass a user `_id` string
       // in place of `req`. Someone must be the recipient.
       //
-      // `message` should be a key that exists in a localization file. If it does not
-      // it will be displayed directly as a fallback.
+      // When called client-side, there is no req argument because the recipient is always the current user.
       //
-      // `options.type` styles the notification and may be set to `error`,
-      // `warning` or `success`. If not set, a "plain" default style is used.
+      // The `message` argument should be a key that exists in a localization file.
+      // If it does not, it will be displayed directly as a fallback.
+      //
+      // The `options.type` styles the notification and may be set to `error`, `danger`,
+      // `warning`, `info` or `success`. If not set, a "plain" default style is used.
       //
       // If `options.dismiss` is set to `true`, the message will auto-dismiss after 5 seconds.
       // If it is set to a number of seconds, it will dismiss after that number of seconds.
@@ -263,6 +271,8 @@ module.exports = {
           throw self.apos.error('required');
         }
 
+        req.body = req.body || {};
+
         const notification = {
           _id: self.apos.util.generateId(),
           createdAt: new Date(),
@@ -274,7 +284,8 @@ module.exports = {
           localize: has(req.body, 'localize')
             ? self.apos.launder.boolean(req.body.localize) : true,
           job: options.job || null,
-          event: options.event
+          event: options.event,
+          classes: options.classes || null
         };
 
         if (copiedOptions.dismiss === true) {
@@ -282,6 +293,8 @@ module.exports = {
         }
 
         Object.assign(notification, copiedOptions);
+
+        await self.emit('beforeSave', req, notification);
 
         // We await here rather than returning because we expressly do not
         // want to leak mongodb metadata to the browser
@@ -302,6 +315,8 @@ module.exports = {
             noteId: notification._id
           };
         }
+
+        return {};
       },
 
       // The dismiss method accepts the following arguments:
@@ -317,6 +332,11 @@ module.exports = {
         await pause(delay);
 
         try {
+          await self.emit('beforeSave', req, {
+            _id: noteId,
+            dismissed: true
+          });
+
           await self.db.updateOne(
             {
               _id: noteId
@@ -396,7 +416,7 @@ module.exports = {
 
       async ensureCollection() {
         self.db = self.apos.db.collection('aposNotifications');
-        return self.db.createIndex({
+        await self.db.createIndex({
           userId: 1,
           createdAt: 1
         });

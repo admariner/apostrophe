@@ -1,10 +1,9 @@
-import cuid from 'cuid';
+import { createId } from '@paralleldrive/cuid2';
 
 export default {
   data: () => ({
     fieldErrors: {},
     errorCount: 0
-
   }),
   mounted () {
     this.prepErrors();
@@ -20,7 +19,7 @@ export default {
   },
   methods: {
     updateFieldErrors(fieldState) {
-      this.tabKey = cuid();
+      this.tabKey = createId();
       for (const key in this.groups) {
         this.groups[key].fields.forEach(field => {
           if (fieldState[field]) {
@@ -28,17 +27,19 @@ export default {
           }
         });
       }
+
       this.updateErrorCount();
     },
     updateErrorCount() {
       let count = 0;
-      for (const key in this.fieldErrors) {
-        for (const errKey in this.fieldErrors[key]) {
-          if (this.fieldErrors[key][errKey]) {
+      for (const group in this.fieldErrors) {
+        for (const field in this.fieldErrors[group]) {
+          if (this.fieldErrors[group][field]) {
             count++;
           }
         }
       }
+
       this.errorCount = count;
     },
     prepErrors() {

@@ -2,7 +2,8 @@
   <AposContextMenu
     class="apos-admin-user"
     :button="button"
-    :menu="menu"
+    :menu="items"
+    :center-on-icon="true"
     menu-placement="bottom-end"
     @item-clicked="emitEvent"
   >
@@ -19,16 +20,11 @@
 
 export default {
   name: 'TheAposAdminBarUser',
-  data() {
-    return {
-      menu: [
-        {
-          label: 'apostrophe:logOut',
-          name: 'logOut',
-          action: 'user-logout'
-        }
-      ]
-    };
+  props: {
+    items: {
+      type: Array,
+      required: true
+    }
   },
   computed: {
     button() {
@@ -47,10 +43,8 @@ export default {
     }
   },
   methods: {
-    emitEvent(e) {
-      if (e === 'user-logout') {
-        apos.bus.$emit('admin-menu-click', '@apostrophecms/login-logout');
-      }
+    emitEvent(name) {
+      apos.bus.$emit('admin-menu-click', name);
     }
   }
 };
@@ -61,14 +55,17 @@ export default {
   display: inline-flex;
   align-items: center;
 
-  ::v-deep .apos-button {
+  :deep(.apos-button) {
     @include type-base;
-    color: var(--a-text-primary);
+
+    & {
+      color: var(--a-text-primary);
+    }
   }
 
-  ::v-deep .apos-context-menu__popup {
+  :deep(.apos-context-menu__popup) {
     right: 0;
-    transform: translatex(10px);
+    transform: translateX(10px);
   }
 }
 

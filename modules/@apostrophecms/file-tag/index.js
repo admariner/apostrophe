@@ -6,7 +6,9 @@ module.exports = {
     quickCreate: false,
     autopublish: true,
     editRole: 'editor',
-    publishRole: 'editor'
+    publishRole: 'editor',
+    shortcut: 'G,Shift+F',
+    relationshipSuggestionIcon: 'tag-icon'
   },
   fields: {
     remove: [ 'visibility' ]

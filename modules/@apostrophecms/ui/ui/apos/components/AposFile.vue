@@ -2,10 +2,12 @@
   <div>
     <label
       class="apos-input-wrapper apos-file-dropzone"
+      tabindex="0"
       :class="{
         'apos-file-dropzone--dragover': dragging,
         'apos-is-disabled': disabled || fileOrAttachment
       }"
+      @keydown="handleKeydown"
       @drop.prevent="uploadFile"
       @dragover="dragHandler"
       @dragleave="dragging = false"
@@ -18,7 +20,7 @@
         <template v-else>
           <paperclip-icon :size="14" class="apos-file-icon" />
           {{ messages.primary }}&nbsp;
-          <span class="apos-file-highlight" v-if="messages.highlighted">
+          <span v-if="messages.highlighted" class="apos-file-highlight">
             {{ messages.highlighted }}
           </span>
         </template>
@@ -28,15 +30,16 @@
         type="file"
         class="apos-sr-only"
         :disabled="disabled || fileOrAttachment"
-        @input="uploadFile"
         :accept="allowedExtensions"
+        tabindex="-1"
+        @input="uploadFile"
       >
     </label>
     <div v-if="fileOrAttachment" class="apos-file-files">
       <AposSlatList
-        :value="[fileOrAttachment]"
-        @input="update"
+        :model-value="[fileOrAttachment]"
         :disabled="attachmentDisabled"
+        @update:model-value="update"
       />
     </div>
   </div>
@@ -86,21 +89,30 @@ export default {
     },
     messages() {
       const msgs = {
-        primary: 'Drop a file here or',
-        highlighted: 'click to open the file explorer'
+        primary: this.$t('apostrophe:fileUploaderDropFile'),
+        highlighted: this.$t('apostrophe:fileUploaderOpenExplorer')
       };
       if (this.disabled) {
-        msgs.primary = 'Field is disabled';
+        msgs.primary = this.$t('apostrophe:fileUploaderFieldIsDisabled');
         msgs.highlighted = '';
       }
       if (this.fileOrAttachment) {
-        msgs.primary = 'Attachment limit reached';
+        msgs.primary = this.$t('apostrophe:fileUploaderAttachmentLimitReached');
         msgs.highlighted = '';
       }
       return msgs;
     }
   },
   methods: {
+    handleKeydown(event) {
+      switch (event.key) {
+        case ' ':
+        case 'Enter':
+          event.preventDefault();
+          this.$refs.uploadField.click();
+          break;
+      }
+    },
     async uploadFile ({ target, dataTransfer }) {
       this.dragging = false;
       const [ file ] = target.files ? target.files : (dataTransfer.files || []);
@@ -160,23 +172,28 @@ export default {
 };
 </script>
 <style scoped lang='scss'>
+
   .apos-file-dropzone {
     @include apos-button-reset();
     @include type-base;
-    display: block;
-    margin: 10px 0;
-    padding: 20px;
-    border: 2px dashed var(--a-base-8);
-    border-radius: var(--a-border-radius);
-    transition: all 0.2s ease;
-    &:hover {
-      border-color: var(--a-primary);
-      background-color: var(--a-base-10);
+
+    & {
+      display: block;
+      margin: 10px 0;
+      padding: 20px;
+      border: 2px dashed var(--a-base-8);
+      border-radius: var(--a-border-radius);
+      transition: all 200ms ease;
     }
+
+    &:hover,
     &:active,
     &:focus {
-      border: 2px solid var(--a-primary);
+      border-color: var(--a-primary);
+      background-color: var(--a-base-10);
+      outline: none;
     }
+
     &.apos-is-disabled {
       color: var(--a-base-4);
       background-color: var(--a-base-7);
@@ -200,7 +217,7 @@ export default {
     justify-content: center;
     pointer-events: none;
     // v-html goofiness
-    & ::v-deep .apos-file-highlight {
+    &:deep(.apos-file-highlight) {
       color: var(--a-primary);
       font-weight: var(--a-weight-bold);
     }

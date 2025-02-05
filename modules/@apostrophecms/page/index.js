@@ -5,7 +5,7 @@ const { SemanticAttributes } = require('@opentelemetry/semantic-conventions');
 const expressCacheOnDemand = require('express-cache-on-demand')();
 
 module.exports = {
-  cascades: [ 'batchOperations' ],
+  cascades: [ 'filters', 'batchOperations', 'utilityOperations' ],
   options: {
     alias: 'page',
     types: [
@@ -33,20 +33,198 @@ module.exports = {
         orphan: true,
         title: 'Archive'
       }
-    ]
+    ],
+    redirectFailedUpperCaseUrls: true,
+    relationshipSuggestionIcon: 'web-icon'
+  },
+  filters: {
+    add: {
+      archived: {
+        label: 'apostrophe:archived',
+        inputType: 'radio',
+        choices: [
+          {
+            value: false,
+            label: 'apostrophe:live'
+          },
+          {
+            value: true,
+            label: 'apostrophe:archived'
+          }
+        ],
+        // TODO: Delete `allowedInChooser` if not used.
+        allowedInChooser: false,
+        def: false,
+        required: true
+      }
+    }
+  },
+  utilityOperations(self) {
+    return {
+      add: {
+        new: {
+          canCreate: true,
+          relationship: true,
+          label: {
+            key: 'apostrophe:newDocType',
+            type: '$t(apostrophe:page)'
+          },
+          eventOptions: {
+            event: 'edit',
+            type: self.__meta.name
+          }
+        }
+      }
+    };
   },
   batchOperations: {
     add: {
-      archive: {
-        label: 'apostrophe:archive'
-      },
       publish: {
-        label: 'apostrophe:publish'
+        label: 'apostrophe:publish',
+        messages: {
+          progress: 'apostrophe:batchPublishProgress',
+          completed: 'apostrophe:batchPublishCompleted'
+        },
+        icon: 'earth-icon',
+        modalOptions: {
+          title: 'apostrophe:publishType',
+          description: 'apostrophe:publishingBatchConfirmation',
+          confirmationButton: 'apostrophe:publishingBatchConfirmationButton'
+        },
+        permission: 'publish'
       },
-      unpublish: {
-        label: 'apostrophe:unpublish'
+      archive: {
+        label: 'apostrophe:archive',
+        messages: {
+          progress: 'apostrophe:batchArchiveProgress',
+          completed: 'apostrophe:batchArchiveCompleted'
+        },
+        icon: 'archive-arrow-down-icon',
+        if: {
+          archived: false
+        },
+        modalOptions: {
+          title: 'apostrophe:archiveType',
+          description: 'apostrophe:archivingBatchConfirmation',
+          confirmationButton: 'apostrophe:archivingBatchConfirmationButton'
+        },
+        permission: 'delete'
+      },
+      restore: {
+        label: 'apostrophe:restore',
+        messages: {
+          progress: 'apostrophe:batchRestoreProgress',
+          completed: 'apostrophe:batchRestoreCompleted'
+        },
+        icon: 'archive-arrow-up-icon',
+        if: {
+          archived: true
+        },
+        modalOptions: {
+          title: 'apostrophe:restoreType',
+          description: 'apostrophe:restoreBatchConfirmation',
+          confirmationButton: 'apostrophe:restoreBatchConfirmationButton'
+        },
+        permission: 'edit'
+      }
+    },
+    group: {
+      more: {
+        icon: 'dots-vertical-icon',
+        operations: []
       }
     }
+  },
+  commands(self) {
+    return {
+      add: {
+        [`${self.__meta.name}:manager`]: {
+          type: 'item',
+          label: 'apostrophe:page',
+          action: {
+            type: 'admin-menu-click',
+            payload: {
+              itemName: `${self.__meta.name}:manager`
+            }
+          },
+          permission: {
+            action: 'edit',
+            type: self.__meta.name
+          },
+          shortcut: self.options.shortcut ?? `G,${self.apos.task.getReq().t('apostrophe:page').slice(0, 1)}`
+        },
+        [`${self.__meta.name}:create-new`]: {
+          type: 'item',
+          label: 'apostrophe:commandMenuCreateNew',
+          action: {
+            type: 'command-menu-manager-create-new'
+          },
+          permission: {
+            action: 'create',
+            type: self.__meta.name
+          },
+          shortcut: 'C'
+        },
+        [`${self.__meta.name}:search`]: {
+          type: 'item',
+          label: 'apostrophe:commandMenuSearch',
+          action: {
+            type: 'command-menu-manager-focus-search'
+          },
+          shortcut: 'Ctrl+F Meta+F'
+        },
+        [`${self.__meta.name}:select-all`]: {
+          type: 'item',
+          label: 'apostrophe:commandMenuSelectAll',
+          action: {
+            type: 'command-menu-manager-select-all'
+          },
+          shortcut: 'Ctrl+Shift+A Meta+Shift+A'
+        },
+        [`${self.__meta.name}:archive-selected`]: {
+          type: 'item',
+          label: 'apostrophe:commandMenuArchiveSelected',
+          action: {
+            type: 'command-menu-manager-archive-selected'
+          },
+          permission: {
+            action: 'delete',
+            type: self.__meta.name
+          },
+          shortcut: 'E'
+        },
+        [`${self.__meta.name}:exit-manager`]: {
+          type: 'item',
+          label: 'apostrophe:commandMenuExitManager',
+          action: {
+            type: 'command-menu-manager-close'
+          },
+          shortcut: 'Q'
+        }
+      },
+      modal: {
+        default: {
+          '@apostrophecms/command-menu:manager': {
+            label: 'apostrophe:commandMenuManager',
+            commands: [
+              `${self.__meta.name}:manager`
+            ]
+          }
+        },
+        [`${self.__meta.name}:manager`]: {
+          '@apostrophecms/command-menu:manager': {
+            label: 'apostrophe:commandMenuManager',
+            commands: [
+              `${self.__meta.name}:create-new`,
+              `${self.__meta.name}:search`,
+              `${self.__meta.name}:select-all`,
+              `${self.__meta.name}:archive-selected`,
+              `${self.__meta.name}:exit-manager`
+            ]
+          }
+        }
+      }
+    };
   },
   async init(self) {
     const { enableCacheOnDemand = true } = self.apos
@@ -61,7 +239,11 @@ module.exports = {
     self.enableBrowserData();
     self.addLegacyMigrations();
     self.addMisreplicatedParkedPagesMigration();
+    self.addDuplicateParkedPagesMigration();
+    self.apos.migration.add('deduplicateRanks2', self.deduplicateRanks2Migration);
+    self.apos.migration.add('missingLastPublishedAt', self.missingLastPublishedAtMigration);
     await self.createIndexes();
+    self.composeFilters();
   },
   restApiRoutes(self) {
 
@@ -80,6 +262,9 @@ module.exports = {
       // The user must have some page editing privileges to use it. The 10 best
       // matches are returned as an object with a `results` property containing the
       // array of pages.
+      // If ?type=x is present, only pages of that type are returned. This query
+      // parameter is only used in conjunction with ?autocomplete=x. It will be
+      // ignored otherwise.
       //
       // If querying for draft pages, you may add ?published=1 to attach a
       // `_publishedDoc` property to each draft that also exists in a published form.
@@ -87,29 +272,69 @@ module.exports = {
       getAll: [
         ...self.enableCacheOnDemand ? [ expressCacheOnDemand ] : [],
         async (req) => {
-          self.publicApiCheck(req);
+          await self.publicApiCheckAsync(req);
           const all = self.apos.launder.boolean(req.query.all);
           const archived = self.apos.launder.booleanOrNull(req.query.archived);
           const flat = self.apos.launder.boolean(req.query.flat);
           const autocomplete = self.apos.launder.string(req.query.autocomplete);
+          const type = self.apos.launder.string(req.query.type);
 
           if (autocomplete.length) {
-            if (!self.apos.permission.can(req, 'edit', '@apostrophecms/any-page-type')) {
+            if (!self.apos.permission.can(req, 'view', '@apostrophecms/any-page-type')) {
               throw self.apos.error('forbidden');
             }
+
+            if (type.length && !self.apos.permission.can(req, 'view', type)) {
+              throw self.apos.error('forbidden');
+            }
+
+            const query = self.getRestQuery(req).permission(false).limit(10).relationships(false)
+              .areas(false);
+            if (type.length) {
+              query.type(type);
+            }
+
             return {
               // For consistency with the pieces REST API we
               // use a results property when returning a flat list
-              results: await self.getRestQuery(req).limit(10).relationships(false)
-                .areas(false).toArray()
+              results: await query.toArray()
+            };
+          }
+
+          if (type.length) {
+            const manager = self.apos.doc.getManager(type);
+            if (!manager) {
+              throw self.apos.error('invalid');
+            }
+
+            const query = self.getRestQuery(req);
+            query
+              .type(type)
+              .ancestors(false)
+              .children(false)
+              .attachments(false)
+              .perPage(manager.options.perPage);
+
+            // populates totalPages when perPage is present
+            await query.toCount();
+
+            const docs = await query.toArray();
+
+            return {
+              results: docs.map(doc => manager.removeForbiddenFields(req, doc)),
+              pages: query.get('totalPages'),
+              currentPage: query.get('page') || 1,
+              ...(query.get('choicesResults') && {
+                choices: query.get('choicesResults')
+              })
             };
           }
 
           if (all) {
-            if (!self.apos.permission.can(req, 'edit', '@apostrophecms/any-page-type')) {
+            if (!self.apos.permission.can(req, 'view', '@apostrophecms/any-page-type')) {
               throw self.apos.error('forbidden');
             }
-            const page = await self.getRestQuery(req).and({ level: 0 }).children({
+            const page = await self.getRestQuery(req).permission(false).and({ level: 0 }).children({
               depth: 1000,
               archived,
               orphan: null,
@@ -175,9 +400,9 @@ module.exports = {
         async (req, _id) => {
           _id = self.inferIdLocaleAndMode(req, _id);
           // Edit access to draft is sufficient to fetch either
-          self.publicApiCheck(req);
+          await self.publicApiCheckAsync(req);
           const criteria = self.getIdCriteria(_id);
-          const result = await self.getRestQuery(req).and(criteria).toObject();
+          const result = await self.getRestQuery(req).permission(false).and(criteria).toObject();
 
           if (self.options.cache && self.options.cache.api && self.options.cache.api.maxAge) {
             const { maxAge } = self.options.cache.api;
@@ -192,8 +417,12 @@ module.exports = {
           if (!result) {
             throw self.apos.error('notfound');
           }
-          if (self.apos.launder.boolean(req.query['render-areas']) === true) {
-            await self.apos.area.renderDocsAreas(req, [ result ]);
+          const renderAreas = req.query['render-areas'];
+          const inline = renderAreas === 'inline';
+          if (inline || self.apos.launder.boolean(renderAreas)) {
+            await self.apos.area.renderDocsAreas(req, [ result ], {
+              inline
+            });
           }
           // Attach `_url` and `_urls` properties
           self.apos.attachment.all(result, { annotate: true });
@@ -213,17 +442,17 @@ module.exports = {
       //
       // This call is atomic with respect to other REST write operations on pages.
       async post(req) {
-        self.publicApiCheck(req);
-        req.body._position = req.body._position || 'lastChild';
+        await self.publicApiCheckAsync(req);
         let targetId = self.apos.launder.string(req.body._targetId);
-        let position = self.apos.launder.string(req.body._position);
+        let position = self.apos.launder.string(req.body._position || 'lastChild');
         // Here we have to normalize before calling insert because we
         // need the parent page to call newChild(). insert calls again but
         // sees there's no work to be done, so no performance hit
         const normalized = await self.getTargetIdAndPosition(req, null, targetId, position);
-        targetId = normalized.targetId;
+        targetId = normalized.targetId || '_home';
         position = normalized.position;
         const copyingId = self.apos.launder.id(req.body._copyingId);
+        const createId = self.apos.launder.id(req.body._createId);
         const input = _.omit(req.body, '_targetId', '_position', '_copyingId');
         if (typeof (input) !== 'object') {
           // cheeky
@@ -233,15 +462,24 @@ module.exports = {
         if (req.body._newInstance) {
           // If we're looking for a fresh page instance and aren't saving yet,
           // simply get a new page doc and return it
-          const parentPage = await self.findForEditing(req, { _id: targetId })
-            .permission('edit', '@apostrophecms/any-page-type').toObject();
-          const newChild = self.newChild(parentPage);
+          const parentPage = await self.findForEditing(req, self.getIdCriteria(targetId))
+            .permission('create', '@apostrophecms/any-page-type').toObject();
+          const { _newInstance, ...body } = req.body;
+          const newChild = {
+            ...self.newChild(parentPage),
+            ...body
+          };
           newChild._previewable = true;
           return newChild;
         }
 
         return self.withLock(req, async () => {
-          const targetPage = await self.findForEditing(req, targetId ? self.getIdCriteria(targetId) : { level: 0 }).ancestors(true).permission('edit').toObject();
+          const targetPage = await self
+            .findForEditing(req, self.getIdCriteria(targetId))
+            .ancestors(true)
+            .permission('create')
+            .toObject();
+
           if (!targetPage) {
             throw self.apos.error('notfound');
           }
@@ -261,11 +499,14 @@ module.exports = {
             page = self.newChild(parentPage);
           }
           await manager.convert(req, input, page, {
-            onlyPresentFields: true,
-            copyingId
+            copyingId,
+            createId
           });
           await self.insert(req, targetPage._id, position, page, { lock: false });
-          return self.findOneForEditing(req, { _id: page._id }, { attachments: true });
+          return self.findOneForEditing(req, { _id: page._id }, {
+            attachments: true,
+            permission: false
+          });
         });
       },
       // Consider using `PATCH` instead unless you're sure you have 100% up to date
@@ -294,9 +535,10 @@ module.exports = {
 
       async put(req, _id) {
         _id = self.inferIdLocaleAndMode(req, _id);
-        self.publicApiCheck(req);
+        await self.publicApiCheckAsync(req);
+
         return self.withLock(req, async () => {
-          const page = await self.find(req, { _id }).toObject();
+          const page = await self.findForEditing(req, { _id }).toObject();
           if (!page) {
             throw self.apos.error('notfound');
           }
@@ -340,10 +582,14 @@ module.exports = {
       },
       async delete(req, _id) {
         _id = self.inferIdLocaleAndMode(req, _id);
-        self.publicApiCheck(req);
+        await self.publicApiCheckAsync(req);
         const page = await self.findOneForEditing(req, {
           _id
         });
+
+        if (!page) {
+          throw self.apos.error('notfound');
+        }
         return self.delete(req, page);
       },
       // Patch some properties of the page.
@@ -351,9 +597,9 @@ module.exports = {
       // You may pass `_targetId` and `_position` to move the page within the tree. `_position`
       // may be `before`, `after` or `inside`. To move a page into or out of the archive, set
       // `archived` to `true` or `false`.
-      patch(req, _id) {
+      async patch(req, _id) {
         _id = self.inferIdLocaleAndMode(req, _id);
-        self.publicApiCheck(req);
+        await self.publicApiCheckAsync(req);
         return self.patch(req, _id);
       }
     };
@@ -379,7 +625,7 @@ module.exports = {
         },
         ':_id/localize': async (req) => {
           const _id = self.inferIdLocaleAndMode(req, req.params._id);
-          const draft = await self.findOneForEditing(req.clone({
+          const draft = await self.findOneForLocalizing(req.clone({
             mode: 'draft'
           }), {
             aposDocId: _id.split(':')[0]
@@ -495,6 +741,91 @@ module.exports = {
             : await self.unshare(req, draft);
 
           return sharedDoc;
+        },
+        publish (req) {
+          if (!Array.isArray(req.body._ids)) {
+            throw self.apos.error('invalid');
+          }
+
+          req.body._ids = req.body._ids.map(_id => {
+            return self.inferIdLocaleAndMode(req, _id);
+          });
+
+          return self.apos.modules['@apostrophecms/job'].runBatch(
+            req,
+            req.body._ids,
+            async function(req, id) {
+              const piece = await self.findOneForEditing(req, { _id: id });
+              if (!piece) {
+                throw self.apos.error('notfound');
+              }
+
+              await self.publish(req, piece);
+            },
+            {
+              action: 'publish'
+            }
+          );
+        },
+        async archive(req) {
+          if (!Array.isArray(req.body._ids)) {
+            throw self.apos.error('invalid');
+          }
+
+          const ids = req.body._ids.map(_id => {
+            return self.inferIdLocaleAndMode(req, _id);
+          });
+
+          const patches = await self.getBatchArchivePatches(req, ids);
+
+          return self.apos.modules['@apostrophecms/job'].runBatch(
+            req,
+            patches.map(patch => patch._id),
+            async function(req, id) {
+              const patch = patches.find(patch => patch._id === id);
+
+              await self.patch(
+                req.clone({
+                  mode: 'draft',
+                  body: patch.body
+                }),
+                patch._id
+              );
+            },
+            {
+              action: 'archive'
+            }
+          );
+        },
+        async restore(req) {
+          if (!Array.isArray(req.body._ids)) {
+            throw self.apos.error('invalid');
+          }
+
+          const ids = req.body._ids.map(_id => {
+            return self.inferIdLocaleAndMode(req, _id);
+          });
+
+          const patches = await self.getBatchRestorePatches(req, ids);
+
+          return self.apos.modules['@apostrophecms/job'].runBatch(
+            req,
+            patches.map(patch => patch._id),
+            async function(req, id) {
+              const patch = patches.find(patch => patch._id === id);
+
+              await self.patch(
+                req.clone({
+                  mode: 'draft',
+                  body: patch.body
+                }),
+                patch._id
+              );
+            },
+            {
+              action: 'restore'
+            }
+          );
         }
       },
       get: {
@@ -519,6 +850,21 @@ module.exports = {
   },
   handlers(self) {
     return {
+      '@apostrophecms/page-type:beforeSave': {
+        handleParkedFieldsOverride(req, doc) {
+          if (!doc.parkedId) {
+            return;
+          }
+          const parked = self.parked.find(p => p.parkedId === doc.parkedId);
+          if (!parked) {
+            return;
+          }
+          const parkedFields = Object.keys(parked).filter(field => field !== '_defaults');
+          for (const parkedField of parkedFields) {
+            doc[parkedField] = parked[parkedField];
+          }
+        }
+      },
       beforeSend: {
         async addLevelAttributeToBody(req) {
           // Add level as a data attribute on the body tag
@@ -578,6 +924,37 @@ module.exports = {
             }
           }
         },
+        detectSchemaConflicts() {
+          for (const left of self.typeChoices) {
+            for (const right of self.typeChoices) {
+              const diff = compareSchema(left, right);
+              if (diff.size) {
+                self.apos.util.warnDev(`The page type "${left.name}" has a conflict with "${right.name}" (${formatDiff(diff)}). This may cause errors or other problems when an editor switches page types.`);
+              }
+            }
+          }
+          function compareSchema(left, right) {
+            const conflicts = new Map();
+            if (left.name === right.name) {
+              return conflicts;
+            }
+
+            const leftSchema = self.apos.modules[left.name].schema;
+            const rightSchema = self.apos.modules[right.name].schema;
+            for (const leftField of leftSchema) {
+              const rightField = rightSchema.find(field => field.name === leftField.name);
+              if (rightField && leftField.type !== rightField.type) {
+                conflicts.set(leftField.name, [ leftField.type, rightField.type ]);
+              }
+            }
+
+            return conflicts;
+          }
+          function formatDiff(diff) {
+            return Array.from(diff.entries())
+              .map(([ entry, [ left, right ] ]) => `${entry}:${left} vs ${entry}:${right}`);
+          }
+        },
         async manageOrphans() {
           const managed = self.apos.doc.getManaged();
 
@@ -605,6 +982,7 @@ database.`);
                   editRole: 'admin',
                   publishRole: 'admin'
                 },
+                permissions: {},
                 find(req) {
                   return [];
                 },
@@ -614,6 +992,74 @@ database.`);
               };
             }
           }
+        },
+        composeBatchOperations() {
+          const groupedOperations = Object.entries(self.batchOperations)
+            .reduce((acc, [ opName, properties ]) => {
+              // Check if there is a required schema field for this batch operation.
+              const requiredFieldNotFound = properties.requiredField && !self.schema
+                .some((field) => field.name === properties.requiredField);
+
+              if (requiredFieldNotFound) {
+                return acc;
+              }
+              // Find a group for the operation, if there is one.
+              const associatedGroup = getAssociatedGroup(opName);
+              const currentOperation = {
+                action: opName,
+                ...properties
+              };
+              const { action, ...props } = getOperationOrGroup(
+                currentOperation,
+                associatedGroup,
+                acc
+              );
+
+              return {
+                ...acc,
+                [action]: {
+                  ...props
+                }
+              };
+            }, {});
+
+          self.batchOperations = Object.entries(groupedOperations)
+            .map(([ action, properties ]) => ({
+              action,
+              ...properties
+            }));
+
+          function getOperationOrGroup (currentOp, [ groupName, groupProperties ], acc) {
+            if (!groupName) {
+              // Operation is not grouped. Return it as it is.
+              return currentOp;
+            }
+
+            // Return the operation group with the new operation added.
+            return {
+              action: groupName,
+              ...groupProperties,
+              operations: [
+                ...(acc[groupName] && acc[groupName].operations) || [],
+                currentOp
+              ]
+            };
+          }
+
+          // Returns the object entry, e.g., `[groupName, { ...groupProperties }]`
+          function getAssociatedGroup (operation) {
+            return Object.entries(self.batchOperationsGroups)
+              .find(([ _key, { operations } ]) => {
+                return operations.includes(operation);
+              }) || [];
+          }
+        },
+        composeUtilityOperations() {
+          self.utilityOperations = Object.entries(self.utilityOperations || {})
+            .map(([ action, properties ]) => ({
+              action,
+              ...properties
+            }));
         }
       },
       'apostrophe:ready': {
@@ -758,25 +1204,38 @@ database.`);
       },
       getBrowserData(req) {
         const browserOptions = _.pick(self, 'action', 'schema', 'types');
-        _.assign(browserOptions, _.pick(self.options, 'batchOperations'));
         _.defaults(browserOptions, {
           label: 'apostrophe:page',
           pluralLabel: 'apostrophe:pages',
           components: {}
         });
         _.defaults(browserOptions.components, {
-          editorModal: 'AposDocEditor',
-          managerModal: 'AposPagesManager'
+          editorModal: self.getComponentName('editorModal', 'AposDocEditor'),
+          managerModal: self.getComponentName('managerModal', 'AposPagesManager')
         });
 
         if (req.data.bestPage) {
           browserOptions.page = self.pruneCurrentPageForBrowser(req.data.bestPage);
         }
         browserOptions.name = self.__meta.name;
+        browserOptions.filters = self.filters;
         browserOptions.canPublish = self.apos.permission.can(req, 'publish', '@apostrophecms/any-page-type');
-        browserOptions.quickCreate = self.options.quickCreate && self.apos.permission.can(req, 'edit', '@apostrophecms/any-page-type', 'draft');
+        browserOptions.canCreate = self.apos.permission.can(req, 'create', '@apostrophecms/any-page-type', 'draft');
+        browserOptions.quickCreate = self.options.quickCreate && self.apos.permission.can(req, 'create', '@apostrophecms/any-page-type', 'draft');
         browserOptions.localized = true;
         browserOptions.autopublish = false;
+        // A list of all valid page types, including parked pages etc. This is
+        // not a menu of choices for creating a page manually
+        browserOptions.validPageTypes = self.apos.instancesOf('@apostrophecms/page-type').map(module => module.__meta.name);
+        browserOptions.canEdit = self.apos.permission.can(req, 'edit', '@apostrophecms/any-page-type', 'draft');
+        browserOptions.canLocalize = browserOptions.canEdit &&
+          browserOptions.localized &&
+          Object.keys(self.apos.i18n.locales).length > 1 &&
+          Object.values(self.apos.i18n.locales).some(locale => locale._edit);
+        browserOptions.batchOperations = self.checkBatchOperationsPermissions(req);
+        browserOptions.utilityOperations = self.utilityOperations;
+        browserOptions.canDeleteDraft = self.apos.permission.can(req, 'delete', '@apostrophecms/any-page-type', 'draft');
+
         return browserOptions;
       },
       // Returns a query that finds pages the current user can edit
@@ -789,8 +1248,8 @@ database.`);
         const query = self.find(req, criteria, options).permission('edit').archived(null);
         return query;
       },
-      // Insert a page. `targetId` must be an existing page id, and
-      // `position` may be `before`, `inside` or `after`. Alternatively
+      // Insert a page. `targetId` must be an existing page id, `_archive` or
+      // `_home`, and `position` may be `before`, `inside` or `after`. Alternatively
       // `position` may be a zero-based offset for the new child
       // of `targetId` (note that the `rank` property of sibling pages
       // is not strictly ascending, so use an array index into `_children` to
@@ -811,8 +1270,6 @@ database.`);
         position = normalized.position;
         return self.withLock(req, async () => {
           let peers;
-          page.aposLastTargetId = targetId;
-          page.aposLastPosition = position;
           const target = await self.getTarget(req, targetId, position);
           if (!target) {
             throw self.apos.error('notfound');
@@ -821,7 +1278,7 @@ database.`);
           if ((position === 'before') || (position === 'after')) {
             parent = await self.findForEditing(req, {
               path: self.getParentPath(target)
-            }).children({
+            }, { permission: 'create' }).children({
               depth: 1,
               archived: null,
               orphan: null,
@@ -837,7 +1294,7 @@ database.`);
             throw self.apos.error('notfound');
           }
           if (options.permissions !== false) {
-            if (!parent._edit) {
+            if (!parent._create) {
               throw self.apos.error('forbidden');
             }
           }
@@ -871,7 +1328,7 @@ database.`);
               return self.insert(req, target._id, 'before', page, options);
             }
             page.rank = target.rank + 1;
-            const index = peers.findIndex(peer => peer.id === target._id);
+            const index = peers.findIndex(peer => peer._id === target._id);
             if (index !== -1) {
               pushed = peers.slice(index + 1).map(peer => peer._id);
             }
@@ -903,6 +1360,15 @@ database.`);
           page.path = self.apos.util.addSlashIfNeeded(parent.path) + page.aposDocId;
           page.level = parent.level + 1;
           await self.apos.doc.insert(req, page, options);
+          // Prevent a published page from being inserted as a child of a draft page.
+          // In effect when this method is called again from the `afterInsert` event
+          // of the `doc` module. This can happen when we are inserting a page
+          // in req.mode == 'published', which results in insertDrafOf being called
+          // (`page-type` module).
+          if (page.lastPublishedAt && !parent.lastPublishedAt) {
+            await self.unpublish(req, page);
+            throw self.apos.error('forbidden', 'Publish the parent page first.');
+          }
           return page;
         });
       },
@@ -992,8 +1458,8 @@ database.`);
       },
       // Move a page already in the page tree to another location.
       //
-      // `movedId` is the id of the page being moved. ``targetId` must be an existing page
-      // id, and `position` may be `before`, `inside` or `after`. Alternatively
+      // `movedId` is the id of the page being moved. `targetId` must be an existing page
+      // id, and `position` may be `before`, `firstChild`, `lastChild` or `after`. Alternatively
       // `position` may be a zero-based offset for the new child
       // of `targetId` (note that the `rank` property of sibling pages
       // is not strictly ascending, so use an array index into `_children` to
@@ -1023,10 +1489,29 @@ database.`);
           let originalSlug;
           const moved = await getMoved();
           const oldParent = moved._ancestors[0];
-          const target = await self.getTarget(req, targetId, position);
+          let target;
+          try {
+            target = await self.getTarget(req, targetId, position);
+          } catch (e) {
+            // Try again with the draft version of the target, only when
+            // moving before/after and the target is published page.
+            if (e.name === 'notfound' && targetId.endsWith(':published') && [ 'before', 'after' ].includes(position)) {
+              target = await self.getTarget(
+                req.clone({ mode: 'draft' }),
+                targetId.replace(':published', ':draft'),
+                position
+              );
+            } else {
+              throw e;
+            }
+          }
           const manager = self.apos.doc.getManager(moved.type);
           await manager.emit('beforeMove', req, moved, target, position);
           determineRankAndNewParent();
+          // Simple check to see if we are moving the page beneath itself
+          if (parent.path.split('/').includes(moved.aposDocId)) {
+            throw self.apos.error('forbidden', 'Cannot move a page under itself');
+          }
           if (!moved._edit) {
             throw self.apos.error('forbidden');
           }
@@ -1034,7 +1519,12 @@ database.`);
             // Move outside tree
             throw self.apos.error('forbidden');
           }
-          if ((oldParent._id !== parent._id) && (parent.type !== '@apostrophecms/archive-page') && (!parent._edit)) {
+          if (
+            (oldParent._id !== parent._id) &&
+            (parent.type !== '@apostrophecms/archive-page') &&
+            (!parent._create) &&
+            (oldParent.type === '@apostrophecms/archive-page' && !parent._edit)
+          ) {
             throw self.apos.error('forbidden');
           }
           if (moved.lastPublishedAt && !parent.lastPublishedAt) {
@@ -1059,8 +1549,10 @@ database.`);
               visibility: null,
               archived: null,
               areas: false,
+              relationships: false,
               permission: false
-            }).toObject();
+            })
+              .toObject();
             if (!moved) {
               throw self.apos.error('invalid', 'No such page');
             }
@@ -1132,11 +1624,14 @@ database.`);
             if (parent._id !== oldParent._id) {
               const matchOldParentSlugPrefix = new RegExp('^' + self.apos.util.regExpQuote(self.apos.util.addSlashIfNeeded(oldParent.slug)));
               if (moved.slug.match(matchOldParentSlugPrefix)) {
-                let slugStem = parent.slug;
-                if (slugStem !== '/') {
-                  slugStem += '/';
-                }
-                moved.slug = moved.slug.replace(matchOldParentSlugPrefix, self.apos.util.addSlashIfNeeded(parent.slug));
+                const movedSlugCandidate = moved.slug
+                  .split('/')
+                  .slice(0, -1)
+                  .join('/');
+
+                moved.slug = parent.slug.endsWith(movedSlugCandidate)
+                  ? parent.slug.replace(movedSlugCandidate, '').concat(moved.slug)
+                  : moved.slug.replace(matchOldParentSlugPrefix, self.apos.util.addSlashIfNeeded(parent.slug));
                 changed.push({
                   _id: moved._id,
                   slug: moved.slug
@@ -1150,8 +1645,6 @@ database.`);
             }
             moved.level = level;
             moved.rank = rank;
-            moved.aposLastTargetId = targetId;
-            moved.aposLastPosition = position;
             // Are we in the archive? Our new parent reveals that
             if (parent.archived) {
               moved.archived = true;
@@ -1169,20 +1662,32 @@ database.`);
       // value. `position` is used to prevent attempts to move after the archive
       // "page."
       async getTarget(req, targetId, position) {
-        const criteria = self.getIdCriteria(targetId);
-        const target = await self.find(req, criteria).permission(false).archived(null).areas(false).ancestors({
-          depth: 1,
-          archived: null,
-          orphan: null,
-          areas: false,
-          permission: false
-        }).children({
-          depth: 1,
-          archived: null,
-          orphan: null,
-          areas: false,
-          permission: false
-        }).toObject();
+        // self.inferIdLocaleAndMode (see i18n module)
+        // is mutating the req object. This leads to various issues. This
+        // handler is shared among different routines (publish, insert, etc)
+        // and should NOT alter the request state.
+        const _req = req.clone({});
+        const criteria = self.getIdCriteria(self.inferIdLocaleAndMode(_req, targetId));
+        // Use findForEditing to ensure we get improvements to that method from
+        // npm modules that make the query more inclusive. Then explicitly shut off
+        // things we know we don't want to be blocked by
+        const target = await self.findForEditing(_req, criteria)
+          .permission(false)
+          .archived(null)
+          .areas(false)
+          .ancestors({
+            depth: 1,
+            archived: null,
+            orphan: null,
+            areas: false,
+            permission: false
+          }).children({
+            depth: 1,
+            archived: null,
+            orphan: null,
+            areas: false,
+            permission: false
+          }).toObject();
         if (!target) {
           throw self.apos.error('notfound');
         }
@@ -1326,7 +1831,7 @@ database.`);
         }
         async function findPage() {
           // Also checks permissions
-          return self.find(req, { _id: _id }).permission('edit').ancestors({
+          return self.find(req, { _id }).permission('edit').ancestors({
             depth: 1,
             archived: null,
             areas: false
@@ -1528,6 +2033,7 @@ database.`);
         if (self.isFound(req)) {
           return;
         }
+
         if (req.user && (req.mode === 'published')) {
           // Try again in draft mode
           try {
@@ -1576,6 +2082,12 @@ database.`);
             // Nonfatal, we were just probing
           }
         }
+
+        // If uppercase letters in URL, try with lowercase
+        if (self.options.redirectFailedUpperCaseUrls && /[A-Z]/.test(req.path)) {
+          req.redirect = self.apos.url.build(req.path.toLowerCase(), req.query);
+        }
+
         // Give all modules a chance to save the day
         await self.emit('notFound', req);
         // Are we happy now?
@@ -1806,10 +2318,6 @@ database.`);
           path: matchParentPathPrefix
         }).areas(false).relationships(false).toArray();
         for (const descendant of descendants) {
-          if (page.archived && !descendant.lastPublishedAt) {
-            await self.delete(req, descendant, { checkForChildren: false });
-            continue;
-          }
           let newSlug = descendant.slug.replace(matchParentSlugPrefix, page.slug + '/');
           if (page.archived && !descendant.archived) {
             // #385: we are moving this to the archive, force a new slug
@@ -1867,7 +2375,12 @@ database.`);
           } else {
             parentSlug = item.parent;
           }
-          return self.findOneForEditing(req, { slug: parentSlug });
+          return self.findOneForEditing(req, {
+            slug: parentSlug
+          }, {
+            areas: false,
+            relationships: false
+          });
         }
         async function findExisting() {
           return self.findOneForEditing(req, { parkedId: item.parkedId });
@@ -1900,7 +2413,10 @@ database.`);
           delete _item._children;
           if (!parent) {
             // Parking the home page for the first time
-            _item.aposDocId = self.apos.util.generateId();
+            _item.aposDocId = await self.apos.doc.bestAposDocId({
+              level: 0,
+              slug: '/'
+            });
             _item.path = _item.aposDocId;
             _item.lastPublishedAt = new Date();
             return self.apos.doc.insert(req, _item);
@@ -1939,9 +2455,64 @@ database.`);
           throw new Error('Wrong number of arguments');
         }
         const slug = argv._[1];
-        const count = await self.apos.doc.db.updateOne({ slug: slug }, { $unset: { parked: 1 } });
+        const count = await self.apos.doc.db.updateOne({ slug }, { $unset: { parked: 1 } });
         if (!count) {
           throw 'No page with that slug was found.';
+        }
+      },
+      // Reattach a page as the last child of the home page even if
+      // the page tree properties are corrupted
+      async reattachTask(argv) {
+        if (argv._.length !== 2) {
+          throw new Error('Wrong number of arguments');
+        }
+        const modes = [ 'draft', 'published' ];
+        const slugOrId = argv._[1];
+        for (const mode of modes) {
+          // Note that page moves are autopublished
+          const req = self.apos.task.getReq({
+            mode
+          });
+          const home = await self.findOneForEditing(req, {
+            slug: '/'
+          });
+          if (!home) {
+            throw `No home page was found in ${req.locale}. Exiting.`;
+          }
+          const page = await self.findOneForEditing(req, {
+            $or: [
+              {
+                slug: slugOrId
+              },
+              {
+                _id: slugOrId
+              }
+            ]
+          });
+          if (!page) {
+            console.log(`No page with that slug or _id was found in ${req.locale}:${req.mode}.`);
+          } else {
+            const rank = (await self.apos.doc.db.find({
+              path: self.matchDescendants(home),
+              aposLocale: req.locale,
+              level: home.level + 1
+            }).project({ rank: 1 }).sort({ rank: 1 }).toArray()).reduce((memo, page) => Math.max(memo, page.rank), 0) + 1;
+            page.path = `${home.path}/${page.aposDocId}`;
+            page.rank = rank;
+            const $set = {
+              path: page.path,
+              rank: page.rank
+            };
+            if (argv['new-slug']) {
+              $set.slug = argv['new-slug'];
+            }
+            await self.apos.doc.db.updateOne({
+              _id: page._id
+            }, {
+              $set
+            });
+            console.log(`Reattached as the last child of the home page in ${req.locale}:${req.mode}.`);
+          }
         }
       },
       // Invoked by the @apostrophecms/version module.
@@ -2077,7 +2648,7 @@ database.`);
       // Apostrophe queries used to fetch Apostrophe pages
       // consult this method.
       getBaseUrl(req) {
-        const hostname = self.apos.i18n.locales[req.locale].hostname;
+        const hostname = self.apos.i18n.locales[req.locale]?.hostname;
 
         return hostname
           ? `${req.protocol}://${hostname}`
@@ -2150,7 +2721,10 @@ database.`);
         return self.apos.doc.getManager(page.type)
           .allowedSchema(req, page, parentPage);
       },
-      getRestQuery(req) {
+      // Can be extended on a project level with `_super(req, true)` to disable
+      // permission check and public API projection. You shouldn't do this
+      // if you're not sure what you're doing.
+      getRestQuery(req, omitPermissionCheck = false) {
         const query = self.find(req)
           .ancestors(true)
           .children(true)
@@ -2158,7 +2732,7 @@ database.`);
           .applyBuildersSafely(req.query);
         // Minimum standard for a REST query without a public projection
         // is being allowed to view drafts on the site
-        if (!self.apos.permission.can(req, 'view-draft')) {
+        if (!omitPermissionCheck && !self.canAccessApi(req)) {
           if (!self.options.publicApiProjection) {
             // Shouldn't be needed thanks to publicApiCheck, but be sure
             query.and({
@@ -2189,6 +2763,9 @@ database.`);
       async findOneForEditing(req, criteria, builders) {
         return self.findForEditing(req, criteria, builders).toObject();
       },
+      async findOneForLocalizing(req, criteria, builders) {
+        return self.findForEditing(req, criteria, builders).toObject();
+      },
       // Throws a `notfound` exception if a public API projection is
       // not specified and the user does not have the `view-draft` permission,
       // which all roles capable of editing the site at all will have. This is needed because
@@ -2196,10 +2773,15 @@ database.`);
       // we also want to flunk all public access to REST APIs if not specifically configured.
       publicApiCheck(req) {
         if (!self.options.publicApiProjection) {
-          if (!self.apos.permission.can(req, 'view-draft')) {
+          if (!self.canAccessApi(req)) {
             throw self.apos.error('notfound');
           }
         }
+      },
+      // An async version of the above. It can be overridden to implement
+      // an asynchronous check of the public API permissions.
+      async publicApiCheckAsync(req) {
+        return self.publicApiCheck(req);
       },
       getAllProjection() {
         return {
@@ -2303,6 +2885,365 @@ database.`);
             }
           }
         });
+      },
+      addDuplicateParkedPagesMigration() {
+        self.apos.migration.add('duplicate-parked-pages', async () => {
+          let parkedPages = await self.apos.doc.db.find({
+            parkedId: {
+              $ne: null
+            }
+          }).toArray();
+          const parkedIds = [ ...new Set(parkedPages.map(page => page.parkedId)) ];
+          const names = Object.keys(self.apos.i18n.locales);
+          const locales = [
+            ...names.map(locale => `${locale}:draft`),
+            ...names.map(locale => `${locale}:published`),
+            ...names.map(locale => `${locale}:previous`)
+          ];
+          let changes = 0;
+          const winners = new Map();
+          for (const locale of locales) {
+            for (const parkedId of parkedIds) {
+              let matches = parkedPages.filter(page =>
+                (page.parkedId === parkedId) &&
+                (page.aposLocale === locale)
+              );
+              if (matches.length > 0) {
+                if (!winners.has(parkedId)) {
+                  winners.set(parkedId, matches[0].aposDocId);
+                }
+              }
+              if (matches.length > 1) {
+                matches = matches.sort((a, b) => a.createdAt - b.createdAt);
+                const ids = matches.slice(1).map(page => page._id);
+                await self.apos.doc.db.removeMany({
+                  _id: {
+                    $in: ids
+                  }
+                });
+                parkedPages = parkedPages.filter(page => !ids.includes(page._id));
+                changes++;
+              }
+            }
+          }
+          const idChanges = [];
+          for (const parkedId of parkedIds) {
+            const aposDocId = winners.get(parkedId);
+            const matches = parkedPages.filter(page => page.parkedId === parkedId);
+            for (const match of matches) {
+              if (match.aposDocId !== aposDocId) {
+                idChanges.push([ match._id, match._id.replace(match.aposDocId, aposDocId) ]);
+              }
+            }
+          }
+          if (idChanges.length) {
+            // Also calls self.apos.attachment.recomputeAllDocReferences
+            await self.apos.doc.changeDocIds(idChanges);
+          } else if (changes > 0) {
+            await self.apos.attachment.recomputeAllDocReferences();
+          }
+        });
+      },
+      async deduplicateRanks2Migration() {
+        for (const locale of Object.keys(self.apos.i18n.locales)) {
+          for (const mode of [ 'previous', 'draft', 'published' ]) {
+            const pages = await self.apos.doc.db.find({
+              slug: /^\//,
+              aposLocale: `${locale}:${mode}`
+            }, {
+              path: 1,
+              rank: 1,
+              slug: 1
+            }).toArray();
+            const pagesByPath = new Map();
+            for (const page of pages) {
+              page._children = [];
+              pagesByPath.set(page.path, page);
+            }
+            for (const page of pages) {
+              if (page.level === 0) {
+                // Home page has no parent
+                continue;
+              }
+              const parentPath = self.getParentPath(page);
+              const parent = pagesByPath.get(parentPath);
+              if (!parent) {
+                self.apos.util.error(`Warning: page ${page._id} has no parent in the tree`);
+                continue;
+              }
+              parent._children.push(page);
+            }
+            for (const page of pages) {
+              const children = page._children;
+              children.sort((a, b) => a.rank - b.rank);
+              let lastRank = null;
+              let bad = false;
+              for (const child of children) {
+                if (child.rank === lastRank) {
+                  bad = true;
+                  break;
+                }
+                lastRank = child.rank;
+              }
+              if (bad) {
+                self.apos.util.warn(`Fixing ranks for children of ${page.slug} in ${page.aposLocale}`);
+                for (let i = 0; (i < children.length); i++) {
+                  await self.apos.doc.db.updateOne({
+                    _id: children[i]._id
+                  }, {
+                    $set: {
+                      rank: i
+                    }
+                  });
+                }
+              }
+            }
+          }
+        }
+      },
+      missingLastPublishedAtMigration() {
+        return self.apos.migration.eachDoc({
+          aposMode: 'published',
+          lastPublishedAt: null
+        }, async doc => {
+          const draft = await self.apos.doc.db.findOne({
+            _id: doc._id.replace(':published', ':draft')
+          });
+          if (!draft) {
+            self.apos.util.error(`Warning: published document has no matching draft: ${doc._id}`);
+            return;
+          }
+          await self.apos.doc.db.updateOne({
+            _id: doc._id
+          }, {
+            $set: {
+              lastPublishedAt: draft.lastPublishedAt
+            }
+          });
+        });
+      },
+      async inferLastTargetIdAndPosition(doc) {
+        const parentPath = self.getParentPath(doc);
+        const parentAposDocId = parentPath.split('/').pop();
+        const parentId = doc.aposLocale
+          ? `${parentAposDocId}:${doc.aposLocale}`
+          : parentAposDocId;
+        const peerCriteria = {
+          path: self.matchDescendants(parentPath),
+          level: doc.level
+        };
+        if (doc.aposLocale) {
+          peerCriteria.aposLocale = doc.aposLocale;
+        }
+        const peers = await self.apos.doc.db.find(peerCriteria).sort({
+          rank: 1
+        }).project({
+          _id: 1
+        }).toArray();
+        let targetId;
+        let position;
+        const index = peers.findIndex(peer => peer._id === doc._id);
+        if (index === -1) {
+          throw new Error('Cannot find page among its peers');
+        }
+        if (index === 0) {
+          targetId = parentId;
+          position = 'firstChild';
+        } else if (index === (peers.length - 1)) {
+          targetId = parentId;
+          position = 'lastChild';
+        } else {
+          targetId = peers[index - 1]._id;
+          position = 'after';
+        }
+        return {
+          lastTargetId: targetId,
+          lastPosition: position
+        };
+      },
+      checkBatchOperationsPermissions(req) {
+        return self.batchOperations.filter(batchOperation => {
+          if (batchOperation.permission) {
+            return self.apos.permission.can(req, batchOperation.permission, '@apostrophecms/any-page-type');
+          }
+
+          return true;
+        });
+      },
+      composeFilters() {
+        self.filters = Object.keys(self.filters)
+          .map(name => ({
+            name,
+            ...self.filters[name],
+            inputType: self.filters[name].inputType || 'select'
+          }));
+
+        // Add a null choice if not already added or set to `required`
+        self.filters.forEach((filter) => {
+          if (filter.choices) {
+            if (
+              !filter.required &&
+              filter.choices &&
+              !filter.choices.find((choice) => choice.value === null)
+            ) {
+              filter.def = null;
+              filter.choices.push({
+                value: null,
+                label: 'apostrophe:none'
+              });
+            }
+          } else {
+            // Dynamic choices from the REST API, but
+            // we need a label for "no opinion"
+            filter.nullLabel = 'apostrophe:filterMenuChooseOne';
+          }
+        });
+      },
+      async getBatchArchivePatches(req, ids) {
+        const batchReq = req.clone({
+          aposAncestors: true,
+          aposAncestorsApiProjection: {
+            _id: 1,
+            title: 1,
+            level: 1,
+            rank: 1
+          }
+        });
+        const pages = await self
+          .find(batchReq, { _id: { $in: ids } })
+          .areas(false)
+          .relationships(false)
+          .ancestors({
+            archived: null,
+            areas: false,
+            relationships: false
+          })
+          .children({
+            archived: null,
+            areas: false,
+            relationships: false
+          })
+          .archived(null)
+          .toArray();
+
+        const patches = pages.flatMap(page => {
+          const childrenPatches = page._children
+            .filter(child => !ids.includes(child._id))
+            .map(child => {
+              return {
+                _id: child._id,
+                title: child.title,
+                body: {
+                  archived: false,
+                  _targetId: page._id,
+                  _position: 'before'
+                }
+              };
+            });
+
+          const ancestors = page._ancestors.slice().reverse();
+
+          return childrenPatches
+            .concat(
+              ancestors.some(ancestor => ids.includes(ancestor._id))
+                ? {
+                  _id: page._id,
+                  title: page.title,
+                  body: {
+                    _targetId: ancestors.find(ancestor => ids.includes(ancestor._id))?._id || '_archive',
+                    _position: 'lastChild'
+                  }
+                }
+                : {
+                  _id: page._id,
+                  title: page.title,
+                  body: {
+                    archived: true,
+                    _targetId: '_archive',
+                    _position: 'lastChild'
+                  }
+                }
+            );
+        });
+
+        patches
+          .sort((left, right) => left.body.archived && !right.body.archived
+            ? 1
+            : !left.body.archived && right.body.archived
+              ? -1
+              : 0
+          );
+
+        return patches;
+      },
+      async getBatchRestorePatches(req, ids) {
+        const batchReq = req.clone({
+          aposAncestors: true,
+          aposAncestorsApiProjection: {
+            _id: 1,
+            title: 1,
+            level: 1,
+            rank: 1
+          }
+        });
+        const pages = await self
+          .find(batchReq, { _id: { $in: ids } })
+          .areas(false)
+          .relationships(false)
+          .ancestors({
+            archived: null,
+            areas: false,
+            relationships: false
+          })
+          .children({
+            archived: null,
+            areas: false,
+            relationships: false
+          })
+          .archived(null)
+          .toArray();
+
+        const patches = pages.flatMap(page => {
+          const childrenPatches = page._children
+            .filter(child => !ids.includes(child._id))
+            .map(child => {
+              return {
+                _id: child._id,
+                title: child.title,
+                body: {
+                  archived: true,
+                  _targetId: '_archive',
+                  _position: 'lastChild'
+                }
+              };
+            });
+
+          const ancestors = page._ancestors.slice().reverse();
+          const ancestorId = ancestors.find(ancestor => ids.includes(ancestor._id))?._id || '_home';
+
+          return childrenPatches
+            .concat(
+              {
+                _id: page._id,
+                title: page.title,
+                body: {
+                  archived: false,
+                  _targetId: ancestorId,
+                  _position: ancestorId === '_home' ? 'firstChild' : 'lastChild'
+                }
+              }
+            );
+        });
+
+        patches
+          .sort((left, right) => left.body.archived && !right.body.archived
+            ? -1
+            : !left.body.archived && right.body.archived
+              ? 1
+              : 0
+          );
+
+        return patches;
       }
     };
   },
@@ -2318,6 +3259,10 @@ database.`);
       unpark: {
         usage: 'Usage: node app @apostrophecms/page:unpark /page/slug\n\nThis unparks a page that was formerly locked in a specific\nposition in the page tree.',
         task: self.unparkTask
+      },
+      reattach: {
+        usage: 'Usage: node app @apostrophecms/page:reattach _id-or-slug',
+        task: self.reattachTask
       }
     };
   }

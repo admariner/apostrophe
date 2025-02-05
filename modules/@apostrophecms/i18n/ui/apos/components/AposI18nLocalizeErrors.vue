@@ -27,7 +27,7 @@
             {{ docType(item.doc) }}
           </span>
         </div>
-        <div class="apos-confirm__notification-detail" v-if="item.detail">
+        <div v-if="item.detail" class="apos-confirm__notification-detail">
           {{ $t(item.detail) }}
         </div>
       </div>
@@ -36,8 +36,8 @@
 </template>
 
 <script>
-import CheckIcon from 'vue-material-design-icons/Check.vue';
-import CancelIcon from 'vue-material-design-icons/Cancel.vue';
+import CheckIcon from '@apostrophecms/vue-material-design-icons/Check.vue';
+import CancelIcon from '@apostrophecms/vue-material-design-icons/Cancel.vue';
 
 export default {
   name: 'AposI18nLocalizeErrors',
@@ -75,11 +75,14 @@ export default {
 <style lang="scss" scoped>
 .apos-confirm__notifications {
   @include type-base;
-  list-style-type: none;
-  padding-top: 0;
-  padding-bottom: 0;
-  margin-left: 0;
-  text-align: left;
+
+  & {
+    margin-left: 0;
+    padding-top: 0;
+    padding-bottom: 0;
+    text-align: left;
+    list-style-type: none;
+  }
 }
 
 .apos-confirm__notification:not(:last-of-type)  {
@@ -92,8 +95,8 @@ export default {
 
 .apos-confirm__notification-meta {
   display: flex;
-  justify-content: center;
   align-items: center;
+  justify-content: center;
 }
 
 .apos-confirm__notification-detail {
@@ -125,8 +128,8 @@ export default {
 }
 
 .apos-confirm__notification-locale {
-  font-size: var(--a-type-large);
   margin-bottom: $spacing-base;
+  font-size: var(--a-type-large);
 }
 
 .apos-confirm__notification-title,

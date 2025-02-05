@@ -1,7 +1,10 @@
-import Vue from 'Modules/@apostrophecms/ui/lib/vue';
+/* eslint-disable vue/one-component-per-file */
+import createApp from 'Modules/@apostrophecms/ui/lib/vue';
 import { klona } from 'klona';
 
 export default function() {
+
+  const component = apos.vueComponents.AposAreaEditor;
 
   let widgetsRendering = 0;
 
@@ -90,78 +93,58 @@ export default function() {
     }
     el.removeAttribute('data-apos-area-newly-editable');
 
-    const component = window.apos.area.components.editor;
-
     if (apos.area.activeEditor && (apos.area.activeEditor.id === data._id)) {
-      // Editing a piece causes a refresh of the main content area,
-      // but this may contain the area we originally intended to add
-      // a widget to when we created a piece for that purpose. Preserve
-      // the editing experience by restoring that widget's editor to the DOM
-      // rather than creating a new one.
+    // Editing a piece causes a refresh of the main content area,
+    // but this may contain the area we originally intended to add
+    // a widget to when we created a piece for that purpose. Preserve
+    // the editing experience by restoring that widget's editor to the DOM
+    // rather than creating a new one.
+
       el.parentNode.replaceChild(apos.area.activeEditor.$el, el);
     } else {
-      return new Vue({
-        el,
-        data: function() {
-          return {
-            options,
-            id: data._id,
-            items: data.items,
-            choices,
-            docId: _docId,
-            fieldId,
-            renderings
-          };
-        },
-        render(h) {
-          return h(component, {
-            props: {
-              options: this.options,
-              items: this.items,
-              choices: this.choices,
-              id: this.id,
-              docId: this.docId,
-              fieldId: this.fieldId,
-              renderings: this.renderings
-            }
-          });
-        }
+      const app = createApp(component, {
+        options,
+        id: data._id,
+        items: data.items,
+        choices,
+        docId: _docId,
+        fieldId,
+        renderings
       });
+
+      app.mount(el);
     }
   }
 
   function createWidgetClipboardApp() {
-    // Headless app to provide simple reactivity for the clipboard state
-    apos.area.widgetClipboard = new Vue({
-      el: null,
-      data: () => {
+    class Clipboard {
+      constructor() {
         const existing = window.localStorage.getItem('aposWidgetClipboard');
-        return {
-          widgetClipboard: existing ? JSON.parse(existing) : null
-        };
-      },
-      mounted() {
+        this.widgetClipboard = existing ? JSON.parse(existing) : null;
+
         window.addEventListener('storage', this.onStorage);
-      },
-      methods: {
-        set(widget) {
-          this.widgetClipboard = widget;
-          localStorage.setItem('aposWidgetClipboard', JSON.stringify(this.widgetClipboard));
-        },
-        get() {
-          // If we don't clone, the second paste will be a duplicate key error
-          return klona(this.widgetClipboard);
-        },
-        onStorage() {
-          // When local storage changes, dump the list to
-          // the console.
-          const contents = window.localStorage.getItem('aposWidgetClipboard');
-          if (contents) {
-            this.widgetClipboard = JSON.parse(contents);
-          }
+      }
+
+      set(widget) {
+        this.widgetClipboard = widget;
+        localStorage.setItem('aposWidgetClipboard', JSON.stringify(this.widgetClipboard));
+      }
+
+      get() {
+        // If we don't clone, the second paste will be a duplicate key error
+        return klona(this.widgetClipboard);
+      }
+
+      onStorage() {
+        // When local storage changes, dump the list to
+        // the console.
+        const contents = window.localStorage.getItem('aposWidgetClipboard');
+        if (contents) {
+          this.widgetClipboard = JSON.parse(contents);
         }
       }
-    });
-  }
+    }
 
-};
+    apos.area.widgetClipboard = new Clipboard();
+  }
+}

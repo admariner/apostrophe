@@ -2,8 +2,8 @@
   <AposModal
     :modal="modal"
     class="apos-confirm"
-    v-on="mode !== 'alert' ? { esc: cancel } : null"
-    @no-modal="$emit('safe-close')"
+    :class="{ 'apos-confirm--tiny': options.tiny }"
+    v-on="mode !== 'alert' ? { esc: close } : null"
     @inactive="modal.active = false"
     @show-modal="modal.showModal = true"
     @ready="ready"
@@ -11,6 +11,13 @@
     <template #main>
       <AposModalBody>
         <template #bodyMain>
+          <AposIndicator
+            v-if="options.hasCloseButton"
+            icon="close-icon"
+            class="apos-confirm__close-btn"
+            :icon-size="20"
+            @click="close"
+          />
           <img
             v-if="content.icon"
             class="apos-confirm__custom-logo"
@@ -28,8 +35,8 @@
             {{ localize(content.description) }}
           </p>
           <Component
-            v-if="content.body"
             :is="content.body.component"
+            v-if="content.body"
             v-bind="content.body.props"
           />
           <div v-if="content.form" class="apos-confirm__schema">
@@ -43,20 +50,22 @@
           <div class="apos-confirm__btns">
             <AposButton
               v-if="mode !== 'alert'"
+              :attrs="{'data-apos-focus-priority': mode !== 'alert' ? true : null}"
               class="apos-confirm__btn"
               :label="content.negativeLabel || 'apostrophe:cancel'"
               @click="cancel"
             />
             <AposButton
+              ref="confirm"
+              :attrs="{'data-apos-focus-priority': mode === 'alert' ? true : null}"
               class="apos-confirm__btn"
               :label="affirmativeLabel"
-              @click="confirm"
               :type="content.theme || 'primary'"
               :disabled="isDisabled"
-              ref="confirm"
+              @click="confirm"
             />
           </div>
-          <p class="apos-confirm__note" v-if="content.note">
+          <p v-if="content.note" class="apos-confirm__note">
             {{ localize(content.note) }}
           </p>
         </template>
@@ -87,7 +96,7 @@ export default {
       }
     }
   },
-  emits: [ 'safe-close', 'confirm-response', 'modal-result' ],
+  emits: [ 'confirm-response', 'modal-result' ],
   data() {
     return {
       modal: {
@@ -95,8 +104,7 @@ export default {
         active: false,
         type: 'overlay',
         showModal: false,
-        disableHeader: true,
-        trapFocus: true
+        disableHeader: true
       },
       formValues: null
     };
@@ -134,6 +142,10 @@ export default {
     }
   },
   methods: {
+    close() {
+      this.modal.showModal = false;
+      this.$emit('modal-result', null);
+    },
     ready() {
       this.$refs.confirm.$el.querySelector('button').focus();
     },
@@ -159,39 +171,37 @@ export default {
 .apos-confirm {
   z-index: $z-index-modal;
   position: fixed;
-  top: 0;
-  right: 0;
-  bottom: 0;
-  left: 0;
+  inset: 0;
   display: flex;
   align-items: center;
   justify-content: center;
-}
 
-::v-deep .apos-modal__inner {
-  top: auto;
-  right: auto;
-  bottom: auto;
-  left: auto;
-  max-width: 700px;
-  height: auto;
-  text-align: center;
-}
+  :deep(.apos-modal__inner) {
+    inset: auto;
+    max-width: 700px;
+    height: auto;
+    text-align: center;
+  }
 
-::v-deep .apos-modal__overlay {
-  .apos-modal + .apos-confirm & {
-    display: block;
+  :deep(.apos-modal__overlay) {
+    .apos-modal + .apos-confirm & {
+      display: block;
+    }
+  }
+
+  :deep(.apos-modal__body) {
+    padding: 60px;
+  }
+
+  :deep(.apos-modal__body-main) {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
   }
 }
 
-::v-deep .apos-modal__body {
-  padding: 60px;
-}
-
-::v-deep .apos-modal__body-main {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
+.apos-confirm--tiny :deep(.apos-modal__body) {
+  padding: 40px;
 }
 
 .apos-confirm__logo,
@@ -202,29 +212,38 @@ export default {
 
 .apos-confirm__heading {
   @include type-title;
-  line-height: var(--a-line-tall);
-  margin: 0;
+
+  & {
+    line-height: var(--a-line-tall);
+    margin: 0;
+  }
 }
 
 .apos-confirm__description {
   @include type-base;
-  max-width: 370px;
-  line-height: var(--a-line-tallest);
+
+  & {
+    max-width: 370px;
+    line-height: var(--a-line-tallest);
+  }
 }
 
 .apos-confirm__note {
   @include type-small;
-  margin-top: $spacing-double;
-  line-height: var(--a-line-tall);
-  max-width: 355px;
-  color: var(--a-base-2);
+
+  & {
+    margin-top: $spacing-double;
+    line-height: var(--a-line-tall);
+    max-width: 355px;
+    color: var(--a-base-2);
+  }
 }
 
 .apos-confirm__schema {
   margin-top: $spacing-base;
 }
 
-::v-deep .apos-schema .apos-field {
+:deep(.apos-schema .apos-field) {
   margin-bottom: $spacing-base;
 }
 
@@ -238,5 +257,12 @@ export default {
   & + & {
     margin-left: $spacing-double;
   }
+}
+
+.apos-confirm__close-btn {
+  position: absolute;
+  top: 15px;
+  right: 15px;
+  cursor: pointer;
 }
 </style>

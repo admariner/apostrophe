@@ -1,6 +1,7 @@
 const { SemanticAttributes } = require('@opentelemetry/semantic-conventions');
 const _ = require('lodash');
 const util = require('util');
+const extendQueries = require('./lib/extendQueries');
 
 module.exports = {
   options: {
@@ -10,9 +11,17 @@ module.exports = {
     publishRole: 'editor',
     viewRole: false,
     previewDraft: true,
-    relatedDocType: null
+    relatedDocType: null,
+    relationshipSuggestionLabel: 'apostrophe:relationshipSuggestionLabel',
+    relationshipSuggestionHelp: 'apostrophe:relationshipSuggestionHelp',
+    relationshipSuggestionLimit: 25,
+    relationshipSuggestionSort: { updatedAt: -1 },
+    relationshipSuggestionIcon: 'text-box-icon',
+    relationshipSuggestionFields: [ 'slug' ]
   },
-  cascades: [ 'fields' ],
+  // Adding permissions for advanced permissions to allow modules to use it without
+  // being forced to check if the module is used with advanced permissions or not.
+  cascades: [ 'fields', 'permissions' ],
   fields(self) {
     return {
       add: {
@@ -71,9 +80,126 @@ module.exports = {
       }
     };
   },
+  commands(self) {
+    if (
+      self.__meta.name === '@apostrophecms/any-doc-type' ||
+      self.__meta.name === '@apostrophecms/global' ||
+      self.apos.instanceOf(self, '@apostrophecms/any-page-type') ||
+      self.apos.instanceOf(self, '@apostrophecms/page-type') ||
+      self.options.showCreate === false ||
+      self.options.showPermissions === false
+    ) {
+      return null;
+    }
+
+    return {
+      add: {
+        [`${self.__meta.name}:manager`]: {
+          type: 'item',
+          label: self.options.label,
+          action: {
+            type: 'admin-menu-click',
+            payload: {
+              itemName: `${self.__meta.name}:manager`
+            }
+          },
+          permission: {
+            action: 'edit',
+            type: self.__meta.name
+          },
+          shortcut: self.options.shortcut ?? `G,${self.apos.task.getReq().t(self.options.label).slice(0, 1)}`
+        },
+        [`${self.__meta.name}:create-new`]: {
+          type: 'item',
+          label: {
+            key: 'apostrophe:commandMenuCreateNew',
+            type: self.options.label
+          },
+          action: {
+            type: 'command-menu-manager-create-new'
+          },
+          permission: {
+            action: 'create',
+            type: self.__meta.name
+          },
+          shortcut: 'C'
+        },
+        [`${self.__meta.name}:search`]: {
+          type: 'item',
+          label: 'apostrophe:commandMenuSearch',
+          action: {
+            type: 'command-menu-manager-focus-search'
+          },
+          shortcut: 'Ctrl+F Meta+F'
+        },
+        [`${self.__meta.name}:select-all`]: {
+          type: 'item',
+          label: 'apostrophe:commandMenuSelectAll',
+          action: {
+            type: 'command-menu-manager-select-all'
+          },
+          shortcut: 'Ctrl+Shift+A Meta+Shift+A'
+        },
+        [`${self.__meta.name}:archive-selected`]: {
+          type: 'item',
+          label: 'apostrophe:commandMenuArchiveSelected',
+          action: {
+            type: 'command-menu-manager-archive-selected'
+          },
+          permission: {
+            action: 'delete',
+            type: self.__meta.name
+          },
+          shortcut: 'E'
+        },
+        [`${self.__meta.name}:exit-manager`]: {
+          type: 'item',
+          label: 'apostrophe:commandMenuExitManager',
+          action: {
+            type: 'command-menu-manager-close'
+          },
+          shortcut: 'Q'
+        }
+      },
+      modal: {
+        default: {
+          '@apostrophecms/command-menu:manager': {
+            label: 'apostrophe:commandMenuManager',
+            commands: [
+              `${self.__meta.name}:manager`
+            ]
+          }
+        },
+        [`${self.__meta.name}:manager`]: {
+          '@apostrophecms/command-menu:manager': {
+            label: 'apostrophe:commandMenuManager',
+            commands: [
+              `${self.__meta.name}:create-new`,
+              `${self.__meta.name}:search`,
+              `${self.__meta.name}:select-all`,
+              `${self.__meta.name}:archive-selected`,
+              `${self.__meta.name}:exit-manager`
+            ]
+          },
+          '@apostrophecms/command-menu:general': {
+            label: 'apostrophe:commandMenuGeneral',
+            commands: [
+              '@apostrophecms/command-menu:show-shortcut-list'
+            ]
+          }
+        }
+      }
+    };
+  },
   init(self) {
     if (!self.options.name) {
       self.options.name = self.__meta.name;
+    }
+    if (self.options.singletonAuto) {
+      self.options.singleton = true;
+    }
+    if (self.options.replicate === undefined) {
+      self.options.replicate = self.options.localized && self.options.singletonAuto;
     }
     self.name = self.options.name;
     // Each doc-type has an array of fields which will be updated
@@ -92,57 +218,20 @@ module.exports = {
     self.apos.doc.setManager(self.name, self);
     self.enableBrowserData();
     self.addContextMenu();
+
+    // force autopublish to false when not localized to avoid bizarre configuration
+    if (!self.options.localized) {
+      self.options.autopublish = false;
+    }
   },
   handlers(self) {
     return {
       beforeSave: {
-        async updateCacheField(req, doc) {
-          const relatedDocsIds = self.getRelatedDocsIds(req, doc);
-
-          // - Remove current doc reference from docs that include it
-          // - Update these docs' cache field
-          await self.apos.doc.db.updateMany({
-            relatedReverseIds: { $in: [ doc.aposDocId ] },
-            aposLocale: { $in: [ doc.aposLocale, null ] }
-          }, {
-            $pull: { relatedReverseIds: doc.aposDocId },
-            $set: { cacheInvalidatedAt: doc.updatedAt }
-          });
-
-          if (relatedDocsIds.length) {
-            // - Add current doc reference to related docs
-            // - Update related docs' cache field
-            await self.apos.doc.db.updateMany({
-              aposDocId: { $in: relatedDocsIds },
-              aposLocale: { $in: [ doc.aposLocale, null ] }
-            }, {
-              $push: { relatedReverseIds: doc.aposDocId },
-              $set: { cacheInvalidatedAt: doc.updatedAt }
-            });
-          }
-
-          if (doc.relatedReverseIds && doc.relatedReverseIds.length) {
-            // Update related reverse docs' cache field
-            await self.apos.doc.db.updateMany({
-              aposDocId: { $in: doc.relatedReverseIds },
-              aposLocale: { $in: [ doc.aposLocale, null ] }
-            }, {
-              $set: { cacheInvalidatedAt: doc.updatedAt }
-            });
-          }
-
-          if (doc._parentSlug) {
-            // Update piece index page's cache field
-            await self.apos.doc.db.updateOne({
-              slug: doc._parentSlug,
-              aposLocale: { $in: [ doc.aposLocale, null ] }
-            }, {
-              $set: { cacheInvalidatedAt: doc.updatedAt }
-            });
-          }
+        prepareForStorage(req, doc, options) {
+          self.apos.schema.prepareForStorage(req, doc, options);
         },
-        prepareForStorage(req, doc) {
-          self.apos.schema.prepareForStorage(req, doc);
+        async updateCacheField(req, doc) {
+          await self.updateCacheField(req, doc);
         },
         slugPrefix(req, doc) {
           const prefix = self.options.slugPrefix;
@@ -239,6 +328,15 @@ module.exports = {
           }
         }
       },
+      afterDelete: {
+        async deleteRelatedReverseId(req, doc) {
+          // When deleting an unlocalized or draft document,
+          // we remove related reverse IDs of documents having a relation to the deleted one
+          if (!doc.aposMode || doc.aposMode === 'draft') {
+            await self.deleteRelatedReverseId(doc, true);
+          }
+        }
+      },
       afterRescue: {
         async revertDeduplication(req, doc) {
           const $set = await self.getRevertDeduplicationSet(req, doc);
@@ -282,21 +380,76 @@ module.exports = {
 
   methods(self) {
     return {
+      async deleteRelatedReverseId(doc, deleting = false) {
+        const locales = doc.aposLocale && deleting
+          ? [
+            doc.aposLocale.replace(':draft', ':published'),
+            doc.aposLocale.replace(':published', ':draft')
+          ]
+          : [ doc.aposLocale ];
+        return self.apos.doc.db.updateMany({
+          relatedReverseIds: { $in: [ doc.aposDocId ] },
+          aposLocale: { $in: [ ...locales, null ] }
+        }, {
+          $pull: { relatedReverseIds: doc.aposDocId },
+          $set: { cacheInvalidatedAt: doc.updatedAt }
+        });
+      },
+      async updateCacheField(req, doc) {
+        const relatedDocsIds = self.getRelatedDocsIds(req, doc);
+
+        // - Remove current doc reference from docs that include it
+        // - Update these docs' cache field
+        await this.deleteRelatedReverseId(doc);
+
+        if (relatedDocsIds.length) {
+          // - Add current doc reference to related docs
+          // - Update related docs' cache field
+          await self.apos.doc.db.updateMany({
+            aposDocId: { $in: relatedDocsIds },
+            aposLocale: { $in: [ doc.aposLocale, null ] }
+          }, {
+            $push: { relatedReverseIds: doc.aposDocId },
+            $set: { cacheInvalidatedAt: doc.updatedAt }
+          });
+        }
+
+        if (doc.relatedReverseIds && doc.relatedReverseIds.length) {
+          // Update related reverse docs' cache field
+          await self.apos.doc.db.updateMany({
+            aposDocId: { $in: doc.relatedReverseIds },
+            aposLocale: { $in: [ doc.aposLocale, null ] }
+          }, {
+            $set: { cacheInvalidatedAt: doc.updatedAt }
+          });
+        }
+
+        if (doc._parentSlug) {
+          // Update piece index page's cache field
+          await self.apos.doc.db.updateOne({
+            slug: doc._parentSlug,
+            aposLocale: { $in: [ doc.aposLocale, null ] }
+          }, {
+            $set: { cacheInvalidatedAt: doc.updatedAt }
+          });
+        }
+      },
       addContextMenu() {
-        self.apos.doc.addContextOperation(self.__meta.name, {
+        self.apos.doc.addContextOperation({
           action: 'shareDraft',
           context: 'update',
           label: 'apostrophe:shareDraft',
           modal: 'AposModalShareDraft',
           manuallyPublished: true,
-          hasUrl: true
+          hasUrl: true,
+          conditions: [ 'canShareDraft' ]
         });
       },
       getRelatedDocsIds(req, doc) {
         const relatedDocsIds = [];
         const handlers = {
           relationship: (field, doc) => {
-            relatedDocsIds.push(...doc[field.name].map(relatedDoc => self.apos.doc.toAposDocId(relatedDoc)));
+            relatedDocsIds.push(...(doc[field.idsStorage] || []));
           }
         };
 
@@ -347,8 +500,9 @@ module.exports = {
             }
           }
           if (self.extendQueries[name]) {
-            wrap(query.builders, self.extendQueries[name].builders || {});
-            wrap(query.methods, self.extendQueries[name].methods || {});
+            const extendedQueries = self.extendQueries[name](self, query);
+            extendQueries(query.builders, extendedQueries.builders || {});
+            extendQueries(query.methods, extendedQueries.methods || {});
           }
         }
         Object.assign(query, query.methods);
@@ -381,6 +535,26 @@ module.exports = {
       //
       // `query.field` will contain the schema field definition for
       // the relationship the user is attempting to match titles from.
+      getRelationshipQueryBuilderChoicesProjection(query) {
+        const projection = self.getAutocompleteProjection(query);
+
+        return {
+          ...projection,
+          title: 1,
+          type: 1,
+          _id: 1,
+          _url: 1,
+          slug: 1
+        };
+      },
+      // Returns a MongoDB projection object to be used when querying
+      // for this type if all that is needed is a title for display
+      // in an autocomplete menu. Default behavior is to
+      // return only the `title`, `_id` and `slug` properties.
+      // Removing any of these three is not recommended.
+      //
+      // `query.field` will contain the schema field definition for
+      // the relationship the user is attempting to match titles from.
       getAutocompleteProjection(query) {
         return {
           title: 1,
@@ -397,6 +571,11 @@ module.exports = {
       // event start dates and similar information that helps the
       // user distinguish between docs.
       getAutocompleteTitle(doc, query) {
+        // TODO Remove in next major version.
+        self.apos.util.warnDevOnce(
+          'deprecate-get-autocomplete-title',
+          'self.getAutocompleteTitle() is deprecated. Use the autocomplete(\'...\') query builder instead. More info at https://v3.docs.apostrophecms.org/reference/query-builders.html#autocomplete'
+        );
         return doc.title;
       },
       // Used by `@apostrophecms/version` to label changes that
@@ -406,13 +585,16 @@ module.exports = {
         change.text = doc.title;
       },
       // Return a new schema containing only fields for which the
-      // current user has the permission specified by the `permission`
-      // property of the schema field, or there is no `permission` property for the field.
+      // current user has the permission specified by the `editPermission`
+      // property of the schema field, or there is no `editPermission`|`viewPermission` property for the field.
       allowedSchema(req) {
         let disabled;
         let type;
         const schema = _.filter(self.schema, function (field) {
-          return !field.permission || self.apos.permission.can(req, field.permission && field.permission.action, field.permission && field.permission.type);
+          return (!field.editPermission && !field.viewPermission) ||
+            (field.editPermission && self.apos.permission.can(req, field.editPermission.action, field.editPermission.type)) ||
+            (field.viewPermission && self.apos.permission.can(req, field.viewPermission.action, field.viewPermission.type)) ||
+            false;
         });
         const typeIndex = _.findIndex(schema, { name: 'type' });
         if (typeIndex !== -1) {
@@ -485,6 +667,12 @@ module.exports = {
       //
       // We don't launder the input here, see the 'autocomplete' route.
       async autocomplete(req, query) {
+        // TODO Remove in next major version.
+        self.apos.util.warnDevOnce(
+          'deprecate-autocomplete',
+          'self.autocomplete() is deprecated. Use the autocomplete(\'...\') query builder instead. More info at https://v3.docs.apostrophecms.org/reference/query-builders.html#autocomplete'
+        );
+
         const _query = query.find(req, {}).sort('search');
         if (query.extendAutocompleteQuery) {
           query.extendAutocompleteQuery(_query);
@@ -571,7 +759,10 @@ module.exports = {
 
       async convert(req, input, doc, options = {
         presentFieldsOnly: false,
-        copyingId: false
+        fetchRelationships: true,
+        type: null,
+        copyingId: null,
+        createId: null
       }) {
         const fullSchema = self.apos.doc.getManager(options.type || self.name)
           .allowedSchema(req, doc);
@@ -593,8 +784,14 @@ module.exports = {
             ...input
           };
         }
+        const convertOptions = {
+          fetchRelationships: options.fetchRelationships !== false
+        };
+        await self.apos.schema.convert(req, schema, input, doc, convertOptions);
 
-        await self.apos.schema.convert(req, schema, input, doc);
+        if (options.createId) {
+          doc.aposDocId = options.createId;
+        }
 
         if (copyOf) {
           if (copyOf._id) {
@@ -633,6 +830,11 @@ module.exports = {
       // Identical to findOneForEditing by default, but could be
       // overridden usefully in subclasses.
       async findOneForCopying(req, criteria) {
+        return self.findOneForEditing(req, criteria);
+      },
+      // Identical to findOneForEditing by default, but could be
+      // overridden usefully in subclasses.
+      async findOneForLocalizing(req, criteria) {
         return self.findOneForEditing(req, criteria);
       },
       // Submit the current draft for review. The identity
@@ -731,6 +933,7 @@ module.exports = {
           if (previousPublished) {
             previousPublished._id = previousPublished._id.replace(':published', ':previous');
             previousPublished.aposLocale = previousPublished.aposLocale.replace(':published', ':previous');
+            previousPublished.aposMode = 'previous';
             Object.assign(previousPublished, await self.getDeduplicationSet(req, previousPublished));
             await self.apos.doc.db.replaceOne({
               _id: previousPublished._id
@@ -788,6 +991,10 @@ module.exports = {
       // This method accepts the draft or the published version of the document
       // to achieve this.
       async unpublish(req, doc, options) {
+        if (self.options.singleton) {
+          throw self.apos.error('forbidden');
+        }
+
         const DRAFT_SUFFIX = ':draft';
         const PUBLISHED_SUFFIX = ':published';
 
@@ -853,22 +1060,39 @@ module.exports = {
           locale: toLocale,
           mode: 'draft'
         });
+
         const toId = draft._id.replace(`:${draft.aposLocale}`, `:${toLocale}:draft`);
         const actionModule = self.apos.page.isPage(draft) ? self.apos.page : self;
+        // Use findForEditing so that we are successful even for edge cases
+        // like doc templates that don't appear in public renderings, but
+        // also use permission('view') so that we are not actually restricted
+        // to what we can edit, avoiding any confusion about whether there
+        // is really an existing localized doc or not and preventing the
+        // possibility of inserting an unwanted duplicate. The update() call will
+        // still stop us if edit permissions are an issue
         const existing = await actionModule.findForEditing(toReq, {
           _id: toId
-        }).toObject();
+        }).permission('view').toObject();
+
+        const eventOptions = {
+          source: draft.aposLocale.split(':')[0],
+          target: toLocale,
+          existing: Boolean(existing)
+        };
+
         // We only want to copy schema properties, leave non-schema
         // properties of the source document alone
-        const data = Object.fromEntries(Object.entries(draft).filter(([ key, value ]) => self.schema.find(field => field.name === key)));
+        const data = Object.fromEntries(Object.entries(draft)
+          .filter(
+            ([ key, value ]) => key === 'type' || self.schema.find(field => field.name === key)
+          ));
         // We need a slug even if removed from the schema for editing purposes
         data.slug = draft.slug;
         let result;
         if (!existing) {
           if (self.apos.page.isPage(draft)) {
             if (!draft.level) {
-              // Replicating the home page for the first time
-              result = await self.apos.doc.insert(toReq, {
+              const insert = {
                 ...data,
                 aposDocId: draft.aposDocId,
                 aposLocale: `${toLocale}:draft`,
@@ -878,13 +1102,27 @@ module.exports = {
                 rank: draft.rank,
                 parked: draft.parked,
                 parkedId: draft.parkedId
-              });
+              };
+              await self.emit('beforeLocalize', req, insert, eventOptions);
+              // Replicating the home page for the first time
+              result = await self.apos.doc.insert(toReq, insert);
             } else {
               // A page that is not the home page, being replicated for the first time
-              const lastTargetId = draft.aposLastTargetId;
-              let lastPosition = draft.aposLastPosition;
+              let { lastTargetId, lastPosition } = await self.apos.page.inferLastTargetIdAndPosition(draft);
               let localizedTargetId = lastTargetId.replace(`:${draft.aposLocale}`, `:${toLocale}:draft`);
-              const localizedTarget = await actionModule.find(toReq, self.apos.page.getIdCriteria(localizedTargetId)).archived(null).areas(false).relationships(false).toObject();
+              // When fetching the target (parent or peer), always use findForEditing
+              // so we don't miss doc templates and other edge cases, but also use
+              // .permission('view') because we are not actually editing the target
+              // and should not be blocked over edit permissions. Later change this check
+              // to 'create' ("can create a child of this doc"), but not until we're ready
+              // to do it for all creation attempts
+              const localizedTarget = await actionModule
+                .findForEditing(toReq, self.apos.page.getIdCriteria(localizedTargetId))
+                .permission('view')
+                .archived(null)
+                .areas(false)
+                .relationships(false)
+                .toObject();
               if (!localizedTarget) {
                 if ((lastPosition === 'firstChild') || (lastPosition === 'lastChild')) {
                   throw self.apos.error('notfound', req.t('apostrophe:parentNotLocalized'), {
@@ -893,14 +1131,27 @@ module.exports = {
                     parentNotLocalized: true
                   });
                 } else {
-                  const originalTarget = await actionModule.find(req, self.apos.page.getIdCriteria(lastTargetId)).archived(null).areas(false).relationships(false).toObject();
+                  const originalTarget = await actionModule
+                    .findForEditing(req, self.apos.page.getIdCriteria(lastTargetId))
+                    .permission('view')
+                    .archived(null)
+                    .areas(false)
+                    .relationships(false)
+                    .toObject();
                   if (!originalTarget) {
                     // Almost impossible (race conditions like someone removing it while we're in the modal)
                     throw self.apos.error('notfound');
                   }
-                  const localizedTarget = await actionModule.find(toReq, {
+                  const criteria = {
                     path: self.apos.page.getParentPath(originalTarget)
-                  }).archived(null).areas(false).relationships(false).toObject();
+                  };
+                  const localizedTarget = await actionModule
+                    .findForEditing(toReq, criteria)
+                    .permission('view')
+                    .archived(null)
+                    .areas(false)
+                    .relationships(false)
+                    .toObject();
                   if (!localizedTarget) {
                     throw self.apos.error('notfound', req.t('apostrophe:parentNotLocalized'), {
                       // Also provide as data for code that prefers to localize client side
@@ -912,25 +1163,29 @@ module.exports = {
                   lastPosition = 'lastChild';
                 }
               }
+              const insert = {
+                ...data,
+                aposLocale: `${toLocale}:draft`,
+                _id: toId,
+                parked: draft.parked,
+                parkedId: draft.parkedId
+              };
+              await self.emit('beforeLocalize', req, insert, eventOptions);
               result = await actionModule.insert(toReq,
                 localizedTargetId,
                 lastPosition,
-                {
-                  ...data,
-                  aposLocale: `${toLocale}:draft`,
-                  _id: toId,
-                  parked: draft.parked,
-                  parkedId: draft.parkedId
-                }
+                insert
               );
             }
           } else {
-            result = await actionModule.insert(toReq, {
+            const insert = {
               ...data,
               aposDocId: draft.aposDocId,
               aposLocale: `${toLocale}:draft`,
               _id: toId
-            });
+            };
+            await self.emit('beforeLocalize', req, insert, eventOptions);
+            result = await actionModule.insert(toReq, insert);
           }
         } else {
           if (!options.update) {
@@ -944,8 +1199,12 @@ module.exports = {
             aposLocale: `${toLocale}:draft`,
             metaType: 'doc'
           };
+          await self.emit('beforeLocalize', req, update, eventOptions);
           result = await actionModule.update(toReq, update);
         }
+
+        await self.emit('afterLocalize', req, draft, result, eventOptions);
+
         return result;
       },
       // Reverts the given draft to the most recent publication.
@@ -1258,6 +1517,66 @@ module.exports = {
         });
 
         return draft;
+      },
+
+      // Remove forbidden fields from document
+      // A forbidden field is a field for which the current user does not have the appropriate viewPermission to see it
+      removeForbiddenFields(req, doc) {
+        if (!doc) {
+          return doc;
+        }
+
+        const forbiddenSchemaFields = Object.values(self.schema)
+          .filter(field => {
+            return field.viewPermission && !self.apos.permission.can(req, field.viewPermission.action, field.viewPermission.type);
+          });
+
+        if (doc.aposMeta && !self.apos.permission.can(req, 'edit', doc)) {
+          forbiddenSchemaFields.push({
+            name: 'aposMeta'
+          });
+        }
+
+        forbiddenSchemaFields.forEach(field => {
+          delete doc[field.name];
+        });
+
+        return doc;
+      },
+
+      composeFilters() {
+        self.filters = Object.keys(self.filters).map((key) => ({
+          name: key,
+          ...self.filters[key],
+          inputType: self.filters[key].inputType || 'select'
+        }));
+        // Add a null choice if not already added or set to `required`
+        self.filters.forEach((filter) => {
+          if (filter.choices) {
+            if (
+              !filter.required &&
+              filter.choices &&
+              !filter.choices.find((choice) => choice.value === null)
+            ) {
+              filter.def = null;
+              filter.choices.push({
+                value: null,
+                label: 'apostrophe:none'
+              });
+            }
+          } else {
+            // Dynamic choices from the REST API, but
+            // we need a label for "no opinion"
+            filter.nullLabel = 'apostrophe:filterMenuChooseOne';
+          }
+        });
+      },
+
+      composeColumns() {
+        self.columns = Object.keys(self.columns).map((key) => ({
+          name: key,
+          ...self.columns[key]
+        }));
       }
     };
   },
@@ -1276,13 +1595,23 @@ module.exports = {
           label,
           pluralLabel,
           relatedDocument: self.options.relatedDocument,
-          canPublish: self.apos.permission.can(req, 'publish', self.name)
+          canCreate: self.apos.permission.can(req, 'create', self.name, 'draft'),
+          canEdit: self.apos.permission.can(req, 'edit', self.name, 'draft'),
+          canPublish: self.apos.permission.can(req, 'publish', self.name),
+          canArchive: self.apos.permission.can(req, 'delete', self.name)
         };
+        browserOptions.canLocalize = browserOptions.canEdit &&
+          self.options.localized &&
+          Object.keys(self.apos.i18n.locales).length > 1 &&
+          Object.values(self.apos.i18n.locales).some(locale => locale._edit);
         browserOptions.action = self.action;
         browserOptions.schema = self.allowedSchema(req);
         browserOptions.localized = self.isLocalized();
         browserOptions.autopublish = self.options.autopublish;
-        browserOptions.previewDraft = self.isLocalized() && !browserOptions.autopublish && self.options.previewDraft;
+        browserOptions.previewDraft = self.isLocalized() &&
+          !browserOptions.autopublish &&
+          self.options.previewDraft;
+        browserOptions.relationshipSuggestionFields = self.options.relationshipSuggestionFields;
 
         return browserOptions;
       }
@@ -1411,6 +1740,7 @@ module.exports = {
           },
           finalize() {
             let projection = query.get('project') || {};
+            const relationships = query.get('relationships');
             // Keys beginning with `_` are computed values
             // (exception: `_id`). They do not make sense
             // in MongoDB projections. However Apostrophe
@@ -1420,6 +1750,41 @@ module.exports = {
             // to the projection instead.
             const add = [];
             const remove = [];
+
+            // Add type in projection by default
+            const hasExclusion = Object.values(projection).some(value => !value);
+            if (!_.isEmpty(projection) && !hasExclusion) {
+              add.push('type');
+              add.push('metaType');
+            }
+
+            // Add relationships storage fields in projection
+            if (
+              Array.isArray(relationships) &&
+              Object.keys(projection).length &&
+              !Object.values(projection).some((val) => !val)
+            ) {
+              // Didn't find any other way, should work
+              const type = query.get('type');
+              const manager = self.apos.doc.getManager(type);
+              const directRelations = relationships.map(rel => rel.split('.')[0]);
+
+              if (manager) {
+                for (const field of manager.schema) {
+                  if (field.type !== 'relationship') {
+                    continue;
+                  }
+
+                  if (relationships === true || directRelations.includes(field.name)) {
+                    add.push(field.idsStorage);
+                    if (field.fieldsStorage) {
+                      add.push(field.fieldsStorage);
+                    }
+                  }
+                }
+              }
+            }
+
             for (const [ key, val ] of Object.entries(projection)) {
               if (!val) {
                 // For a negative projection this is just
@@ -1428,7 +1793,7 @@ module.exports = {
                 // because they don't want `_url`.
                 continue;
               }
-              if (key.toString().substr(0, 1) === '_') {
+              if (key.toString().substring(0, 1) === '_') {
                 if (key === '_id') {
                   continue;
                 }
@@ -1630,8 +1995,10 @@ module.exports = {
           after(results) {
             // In all cases we mark the docs with ._edit and ._publish if
             // the req is permitted to do those things
+            self.apos.permission.annotate(query.req, 'create', results);
             self.apos.permission.annotate(query.req, 'edit', results);
             self.apos.permission.annotate(query.req, 'publish', results);
+            self.apos.permission.annotate(query.req, 'delete', results);
           }
         },
 
@@ -1864,7 +2231,7 @@ module.exports = {
           finalize() {
             const type = query.get('type');
             if (type) {
-              query.and({ type: type });
+              query.and({ type });
             }
           }
         },
@@ -1880,7 +2247,8 @@ module.exports = {
         relationships: {
           def: true,
           async after(results) {
-            if (!query.get('relationships')) {
+            const relationships = query.get('relationships');
+            if (!relationships) {
               return;
             }
             const resultsByType = _.groupBy(results, 'type');
@@ -1888,7 +2256,12 @@ module.exports = {
               const manager = self.apos.doc.getManager(type);
               // Careful, there will be no manager if type was not part of the projection
               if (manager && manager.schema) {
-                await self.apos.schema.relate(query.req, manager.schema, resultsByType[type], query.get('relationships'));
+                await self.apos.schema.relate(
+                  query.req,
+                  manager.schema,
+                  resultsByType[type],
+                  relationships
+                );
               }
             }
           }
@@ -2024,7 +2397,7 @@ module.exports = {
                   const dotPath = info.dotPath;
                   if (setting && Array.isArray(setting)) {
                     if (!_.includes(setting, dotPath)) {
-                      return;
+                      continue;
                     }
                   }
                   if (doc._edit) {
@@ -2164,8 +2537,14 @@ module.exports = {
               query.and({ $or });
             }
           }
-        }
+        },
 
+        viewContext: {
+          def: null,
+          launder(viewContext) {
+            return [ 'manage', 'relationship' ].includes(viewContext) ? viewContext : null;
+          }
+        }
       },
 
       methods: {
@@ -2372,8 +2751,11 @@ module.exports = {
               subquery.limit(undefined);
               subquery.page(undefined);
               subquery.perPage(undefined);
-              const mongo = await subquery.toMongo();
-              const count = await mongo.count();
+              await subquery.finalize();
+              const count = await self.apos.doc.db.countDocuments({
+                ...subquery.get('criteria'),
+                ...(subquery.get('lateCriteria') || {})
+              });
               if (query.get('perPage')) {
                 const perPage = query.get('perPage');
                 const totalPages = Math.ceil(count / perPage);
@@ -2915,17 +3297,3 @@ module.exports = {
     };
   }
 };
-
-function wrap(context, extensions) {
-  for (const [ name, fn ] of extensions) {
-    if ((typeof fn) !== 'function') {
-      // Nested structure is allowed
-      context[name] = context[name] || {};
-      return wrap(context[name], fn);
-    }
-    const superMethod = context[name];
-    context[name] = function(...args) {
-      return fn(superMethod, ...args);
-    };
-  }
-}

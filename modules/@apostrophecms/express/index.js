@@ -158,10 +158,13 @@ const cors = require('cors');
 const Promise = require('bluebird');
 
 module.exports = {
-  init(self) {
+  async init(self) {
     self.createApp();
     self.prefix();
     self.trustProxy();
+    self.options.externalFrontKey = process.env.APOS_EXTERNAL_FRONT_KEY || self.options.externalFrontKey;
+
+    await self.getSessionOptions();
     if (self.options.baseUrl && !self.apos.baseUrl) {
       self.apos.util.error('WARNING: you have baseUrl set as an option to the `@apostrophecms/express` module.');
       self.apos.util.error('Set it as a global option (a property of the main object passed to apostrophe).');
@@ -249,6 +252,33 @@ module.exports = {
         url: '/api/v1',
         middleware: cors()
       },
+      externalFront(req, res, next) {
+        if (req.headers['x-requested-with'] !== 'AposExternalFront') {
+          return next();
+        }
+        if ((!self.options.externalFrontKey) || (req.headers['apos-external-front-key'] !== self.options.externalFrontKey)) {
+          if (!self.options.externalFrontKey) {
+            self.logError('externalFrontNotEnabled', 'An attempt was made to integrate an external front but the externalFrontKey option has not been set on the @apostrophecms/express module');
+          } else {
+            self.logError('externalFrontKeyInvalid', 'An attempt was made to integrate an external front but the apos-external-front-key header was missing or did not match the externalFrontKey option set on the @apostrophecms/express module');
+          }
+          return res.status(403).send('forbidden');
+        }
+        req.aposExternalFront = true;
+        res.redirect = function(...args) {
+          // The external front end needs to issue the actual redirect,
+          // not us
+          // Per Express handling of 1 arg versus 2
+          const status = args.length > 1 ? args[0] : 302;
+          const url = args[args.length - 1];
+          return res.send({
+            redirect: true,
+            url,
+            status
+          });
+        };
+        return next();
+      },
       attachUtilityMethods(req, res, next) {
         // We apply the super pattern variously to res.redirect,
         // make sure the original version is always available
@@ -268,7 +298,7 @@ module.exports = {
         req.aposStack = [];
         return next();
       },
-      sessions: expressSession(self.getSessionOptions()),
+      sessions: expressSession(self.sessionOptions),
       cookieParser: cookieParser(),
       apiKeys(req, res, next) {
         const key = req.query.apikey || req.query.apiKey || getAuthorizationApiKey();
@@ -461,7 +491,7 @@ module.exports = {
       },
 
       // Options to be passed to the express session options middleware
-      getSessionOptions() {
+      async getSessionOptions() {
         if (self.sessionOptions) {
           return self.sessionOptions;
         }
@@ -526,12 +556,13 @@ module.exports = {
           }
           if (!sessionOptions.store.name) {
             // require from this module's dependencies
-            Store = require('connect-mongo')(expressSession);
+            const MongoStore = require('connect-mongo');
+            sessionOptions.store = MongoStore.create(sessionOptions.store.options);
           } else {
             // require from project's dependencies
-            Store = self.apos.root.require(sessionOptions.store.name)(expressSession);
+            Store = await self.apos.root.import(sessionOptions.store.name)(expressSession);
+            sessionOptions.store = new Store(sessionOptions.store.options);
           }
-          sessionOptions.store = new Store(sessionOptions.store.options);
         }
         // Exported for the benefit of code that needs to
         // interoperate in a compatible way with express-sessions

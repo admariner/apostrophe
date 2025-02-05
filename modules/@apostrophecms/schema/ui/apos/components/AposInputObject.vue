@@ -6,17 +6,24 @@
     :error="null"
     :uid="uid"
     :display-options="displayOptions"
+    :meta="objectMeta"
   >
     <template #body>
       <div class="apos-input-object">
         <div class="apos-input-wrapper">
           <AposSchema
-            :schema="field.schema"
-            :trigger-validation="triggerValidation"
-            :utility-rail="false"
-            :generation="generation"
-            v-model="schemaInput"
             ref="schema"
+            v-model="schemaInput"
+            :meta="currentDocMeta"
+            :schema="schema"
+            :trigger-validation="triggerValidation"
+            :generation="generation"
+            :doc-id="docId"
+            :conditional-fields="conditionalFields"
+            :following-values="followingValuesWithParent"
+            :server-errors="currentDocServerErrors"
+            @update:model-value="evaluateConditions(values)"
+            @validate="emitValidate()"
           />
         </div>
       </div>
@@ -25,51 +32,10 @@
 </template>
 
 <script>
-import AposInputMixin from 'Modules/@apostrophecms/schema/mixins/AposInputMixin.js';
-
+import AposInputObjectLogic from '../logic/AposInputObject';
 export default {
   name: 'AposInputObject',
-  mixins: [ AposInputMixin ],
-  props: {
-    generation: {
-      type: Number,
-      required: false,
-      default() {
-        return null;
-      }
-    }
-  },
-  data () {
-    const next = this.getNext();
-    return {
-      schemaInput: {
-        data: next
-      },
-      next
-    };
-  },
-  watch: {
-    schemaInput() {
-      this.next = this.schemaInput.data;
-    },
-    generation() {
-      this.next = this.getNext();
-      this.schemaInput = {
-        data: this.next
-      };
-    }
-  },
-  methods: {
-    validate (value) {
-      if (this.schemaInput.hasErrors) {
-        return 'invalid';
-      }
-    },
-    // Return next at mount or when generation changes
-    getNext() {
-      return this.value ? this.value.data : (this.field.def || {});
-    }
-  }
+  mixins: [ AposInputObjectLogic ]
 };
 </script>
 
@@ -77,10 +43,12 @@ export default {
   .apos-input-object {
     border-left: 1px solid var(--a-base-9);
   }
+
   .apos-input-wrapper {
     margin: 20px 0 0 19px;
   }
-  .apos-input-object ::v-deep .apos-schema .apos-field {
+
+  .apos-input-object :deep(.apos-schema .apos-field) {
     margin-bottom: 30px;
   }
 </style>

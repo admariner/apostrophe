@@ -1,5 +1,7 @@
 const broadband = require('broadband');
 const _ = require('lodash');
+const addMissingSchemaFields = require('./lib/addMissingSchemaFields.js');
+
 // Provide services for database migration. The `@apostrophecms/migration:migrate` task
 // carries out all migrations that have been registered with this module. Migrations
 // are used to make changes to the database at the time of a new code deployment,
@@ -38,15 +40,11 @@ module.exports = {
               manager.addSortifyMigration(field.name);
             });
           });
-        },
-        async executeMigrations() {
-          if ((process.env.NODE_ENV !== 'production') || self.apos.isNew) {
-            // Run migrations at dev startup (low friction).
-            // Also always run migrations at first startup, so even
-            // in prod with a brand new database the after event always fires
-            // and we get a chance to mark the migrations as skipped
-            await self.migrate(self.apos.argv);
-          }
+        }
+      },
+      before: {
+        async addMissingSchemaFields() {
+          await self.addMissingSchemaFields();
         }
       }
     };
@@ -71,8 +69,8 @@ module.exports = {
           options = {};
         }
         self.migrations.push({
-          name: name,
-          options: options,
+          name,
+          options,
           fn: migrationFn
         });
       },
@@ -115,6 +113,11 @@ module.exports = {
         // https://groups.google.com/forum/#!topic/mongodb-user/AFC1ia7MHzk
         const cursor = collection.find(criteria);
         cursor.sort({ _id: 1 });
+        // TODO use a variant of the code below instead
+        // cursor.batchSize(limit);
+        // for await (const docs of cursor) {
+        //   // await iterator(docs);
+        // }
         return require('util').promisify(broadband)(cursor, limit, async function (doc, cb) {
           try {
             await iterator(doc);
@@ -147,8 +150,8 @@ module.exports = {
           const areaInfos = [];
           self.apos.area.walk(doc, function (area, dotPath) {
             areaInfos.push({
-              area: area,
-              dotPath: dotPath
+              area,
+              dotPath
             });
           });
           for (const areaInfo of areaInfos) {
@@ -220,7 +223,7 @@ module.exports = {
           await self.eachDoc({ $and: clauses }, 5, async function (doc) {
             const $set = {};
             $set[field + 'Sortified'] = self.apos.util.sortify(doc[field]);
-            await self.apos.doc.db.updateOne({ _id: doc._id }, { $set: $set });
+            await self.apos.doc.db.updateOne({ _id: doc._id }, { $set });
           });
         });
       },
@@ -240,8 +243,13 @@ module.exports = {
           // Just in case the db has no documents but did
           // start to run migrations on a previous attempt,
           // which causes an occasional unique key error if not
-          // corrected for here
-          await self.db.removeMany({});
+          // corrected for here.
+          //
+          // Other migration-related facts that are not migration
+          // names are stored with a leading *, leave them alone
+          await self.db.removeMany({
+            _id: /^[^*]/
+          });
           await self.db.insertMany(self.migrations.map(migration => ({
             _id: migration.name,
             at,
@@ -281,14 +289,18 @@ module.exports = {
             throw err;
           }
         }
-      }
+      },
+      ...addMissingSchemaFields(self)
     };
   },
   tasks(self) {
     return {
       migrate: {
         usage: 'Apply any necessary migrations to the database.',
-        task: self.migrate
+        // Migrations actually run on every invocation
+        // and automatically detect whether any work
+        // must be done
+        task: () => {}
       }
     };
   }
