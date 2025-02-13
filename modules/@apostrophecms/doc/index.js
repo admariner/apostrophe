@@ -1,6 +1,7 @@
 const _ = require('lodash');
-const cuid = require('cuid');
+const { createId } = require('@paralleldrive/cuid2');
 const { SemanticAttributes } = require('@opentelemetry/semantic-conventions');
+const { klona } = require('klona');
 
 // This module is responsible for managing all of the documents (apostrophe "docs")
 // in the `aposDocs` mongodb collection.
@@ -36,7 +37,7 @@ module.exports = {
     self.apos.isNew = await self.detectNew();
     await self.createIndexes();
     self.addLegacyMigrations();
-    self.addCacheFieldMigration();
+    self.addMigrations();
   },
   restApiRoutes(self) {
     return {
@@ -66,7 +67,7 @@ module.exports = {
           }
           const slug = self.apos.launder.string(req.body.slug);
           const _id = self.apos.launder.id(req.body._id);
-          const criteria = { slug: slug };
+          const criteria = { slug };
           if (_id) {
             criteria._id = { $ne: _id };
           }
@@ -118,10 +119,23 @@ module.exports = {
       '@apostrophecms/doc-type:beforeInsert': {
         setLocaleAndMode(req, doc, options) {
           const manager = self.getManager(doc.type);
-          if (manager.isLocalized()) {
-            doc.aposLocale = doc.aposLocale || `${req.locale}:${req.mode}`;
-            doc.aposMode = req.mode;
+          if (!manager.isLocalized()) {
+            return;
           }
+
+          if (doc._id) {
+            const [ _id, locale, mode ] = doc._id.split(':');
+            doc.aposLocale = `${locale}:${mode}`;
+            doc.aposMode = mode;
+            return;
+          }
+
+          const [ locale, mode ] = doc.aposLocale
+            ? doc.aposLocale.split(':')
+            : [ req.locale, req.mode ];
+
+          doc.aposLocale = `${locale}:${mode}`;
+          doc.aposMode = mode;
         },
         testPermissionsAndAddIdAndCreatedAt(req, doc, options) {
           self.testInsertPermissions(req, doc, options);
@@ -237,13 +251,22 @@ module.exports = {
           })) {
             return;
           }
+          const lastPublishedAt = doc.createdAt || new Date();
           const draft = {
             ...doc,
             _id: draftId,
             aposLocale: draftLocale,
-            lastPublishedAt: doc.createdAt || new Date()
+            lastPublishedAt
           };
-          return manager.insertDraftOf(req, doc, draft, options);
+          await manager.insertDraftOf(req, doc, draft, options);
+          // Published doc must know it is published, otherwise various bugs ensue
+          return self.apos.doc.db.updateOne({
+            _id: doc._id
+          }, {
+            $set: {
+              lastPublishedAt
+            }
+          });
         }
       },
       fixUniqueError: {
@@ -295,6 +318,146 @@ module.exports = {
   },
   methods(self) {
     return {
+      // `pairs` is an array of arrays, each containing an old _id
+      // and a new _id that should replace it.
+      //
+      // `aposDocId` is implicitly updated, `path` is updated if a page,
+      // and all references found in relationships are updated via reverse
+      // relationship id lookups, after which attachment references are updated.
+      // This is a slow operation, which is why this method should be called only
+      // by migrations and tasks that remedy an unexpected situation. _id is
+      // meant to be an immutable property, this method is a workaround
+      // for situations like a renamed locale or a replication bug fix.
+      //
+      // If `keep` is set to `'old'` the old document's content wins
+      // in the event of a conflict. If `keep` is set to `'new'` the
+      // new document's content wins in the event of a conflict.
+      // If `keep` is not set, a `conflict` error is thrown in the
+      // event of a conflict.
+      //
+      // If `skipReplace` is set to `true`, the method will not attempt to remove
+      // the old document, but will still update the new document. The new _id
+      // for each pair will be used for retrieving the "existing" document in this case.
+
+      async changeDocIds(pairs, { keep, skipReplace = false } = {}) {
+        let renamed = 0;
+        let kept = 0;
+        // Get page paths up front so we can avoid multiple queries when working on path changes
+        const pages = await self.apos.doc.db.find({
+          path: { $exists: 1 },
+          slug: /^\//
+        }).project({
+          path: 1
+        }).toArray();
+        for (const pair of pairs) {
+          const [ from, to ] = pair;
+          const oldAposDocId = from.split(':')[0];
+          const existing = await self.apos.doc.db.findOne({ _id: skipReplace ? to : from });
+          if (!existing) {
+            throw self.apos.error('notfound');
+          }
+          const replacement = klona(existing);
+          if (!skipReplace) {
+            await self.apos.doc.db.removeOne({ _id: from });
+          }
+          replacement._id = to;
+          const parts = to.split(':');
+          replacement.aposDocId = parts[0];
+          // Watch out for nonlocalized types, don't set aposLocale for them
+          if (parts.length > 1) {
+            replacement.aposLocale = parts.slice(1).join(':');
+          }
+          const isPage = self.apos.page.isPage(existing);
+          if (isPage) {
+            replacement.path = existing.path.replace(existing.aposDocId, replacement.aposDocId);
+          }
+          try {
+            if (!skipReplace) {
+              await self.apos.doc.db.insertOne(replacement);
+              renamed++;
+            }
+          } catch (e) {
+            // First reinsert old doc to prevent content loss on new doc insert failure
+            await self.apos.doc.db.insertOne(existing);
+            if (!self.apos.doc.isUniqueError(e)) {
+              // We cannot fix this error
+              throw e;
+            }
+            const existingReplacement = await self.apos.doc.db.findOne({ _id: replacement._id });
+            if (!existingReplacement) {
+              // We don't know the cause of this error
+              throw e;
+            }
+            if (keep === 'new') {
+              // New content already exists in new locale, delete old locale
+              // and keep new
+              await self.apos.doc.db.removeOne({ _id: existing._id });
+              kept++;
+            } else if (keep === 'old') {
+              // We want to keep the old content, but with the new
+              // identifiers. Once again we need to remove the old doc first
+              // to cut down on conflicts
+              try {
+                await self.apos.doc.db.deleteOne({ _id: existing._id });
+                await self.apos.doc.db.deleteOne({ _id: replacement._id });
+                await self.apos.doc.db.insertOne(replacement);
+                renamed++;
+              } catch (e) {
+                // Reinsert old doc to prevent content loss on new doc insert failure
+                await self.apos.doc.db.insertOne(existing);
+                throw e;
+              }
+              kept++;
+            } else {
+              throw self.apos.error('conflict');
+            }
+          }
+          if (isPage && !skipReplace) {
+            for (const page of pages) {
+              if (page.path.includes(oldAposDocId)) {
+                await self.apos.doc.db.updateOne({
+                  _id: page._id
+                }, {
+                  $set: {
+                    path: page.path.replace(oldAposDocId, replacement.aposDocId)
+                  }
+                });
+              }
+            }
+          }
+          if (existing.relatedReverseIds?.length) {
+            const relatedDocs = await self.apos.doc.db.find({
+              aposDocId: { $in: existing.relatedReverseIds }
+            }).toArray();
+            for (const doc of relatedDocs) {
+              replaceId(doc, oldAposDocId, replacement.aposDocId);
+              await self.apos.doc.db.replaceOne({
+                _id: doc._id
+              }, doc);
+            }
+          }
+        }
+        await self.apos.attachment.recomputeAllDocReferences();
+        return {
+          renamed,
+          kept
+        };
+        function replaceId(obj, oldId, newId) {
+          if (obj == null) {
+            return;
+          }
+          if ((typeof obj) !== 'object') {
+            return;
+          }
+          for (const key of Object.keys(obj)) {
+            if (obj[key] === oldId) {
+              obj[key] = newId;
+            } else {
+              replaceId(obj[key], oldId, newId);
+            }
+          }
+        }
+      },
       async enableCollection() {
         self.db = await self.apos.db.collection('aposDocs');
       },
@@ -345,6 +508,15 @@ module.exports = {
         await self.db.createIndex({ parkedId: 1 }, {});
         await self.db.createIndex({
           submitted: 1,
+          aposLocale: 1
+        });
+        await self.db.createIndex({
+          type: 1,
+          aposDocId: 1,
+          aposLocale: 1
+        });
+        await self.db.createIndex({
+          aposDocId: 1,
           aposLocale: 1
         });
         await self.createPathLevelIndex();
@@ -565,7 +737,6 @@ module.exports = {
       // This operation ignores the locale and mode of `req`
       // in favor of the actual document's locale and mode.
       async delete(req, doc, options = {}) {
-        options = options || {};
         const m = self.getManager(doc.type);
         await m.emit('beforeDelete', req, doc, options);
         await self.deleteBody(req, doc, options);
@@ -623,39 +794,40 @@ module.exports = {
       // will be `b`, the value will be `5`, the dotPath
       // will be the string `a.b`, and ancestors will be
       // [ { a: { b: 5 } } ].
-      //
-      // You do not need to pass the `_dotPath` and `_ancestors` arguments.
-      // They are used for recursive invocation.
-      walk(doc, iterator, _dotPath, _ancestors) {
-        // We do not use lodash here because of
-        // performance issues.
-        //
-        // Pruning big nested objects is not something we
-        // can afford to do slowly. -Tom
-        if (_dotPath !== undefined) {
-          _dotPath += '.';
-        } else {
-          _dotPath = '';
-        }
-        _ancestors = (_ancestors || []).concat(doc);
-        const remove = [];
-        for (const key in doc) {
-          const __dotPath = _dotPath + key.toString();
-          const ow = '_originalWidgets';
-          if (__dotPath === ow || __dotPath.substring(0, ow.length) === ow + '.') {
-            continue;
+      walk(doc, iterator) {
+        return walkBody(doc, iterator, undefined, []);
+        function walkBody(doc, iterator, _dotPath, _ancestors) {
+          if (_ancestors.includes(doc)) {
+            // No infinite loops on circular references
+            return;
           }
-          if (iterator(doc, key, doc[key], __dotPath, _ancestors) === false) {
-            remove.push(key);
+          // Don't use concat, doc can be an array in which case
+          // it is important to preserve the nesting
+          _ancestors = [ ..._ancestors, doc ];
+          if (_dotPath !== undefined) {
+            _dotPath += '.';
           } else {
-            const val = doc[key];
-            if (typeof val === 'object') {
-              self.walk(val, iterator, __dotPath, _ancestors.concat([ doc ]));
+            _dotPath = '';
+          }
+          const remove = [];
+          for (const key in doc) {
+            const __dotPath = _dotPath + key.toString();
+            const ow = '_originalWidgets';
+            if (__dotPath === ow || __dotPath.substring(0, ow.length) === ow + '.') {
+              continue;
+            }
+            if (iterator(doc, key, doc[key], __dotPath, _ancestors) === false) {
+              remove.push(key);
+            } else {
+              const val = doc[key];
+              if (typeof val === 'object') {
+                walkBody(val, iterator, __dotPath, _ancestors);
+              }
             }
           }
-        }
-        for (const key of remove) {
-          delete doc[key];
+          for (const key of remove) {
+            delete doc[key];
+          }
         }
       },
       // Retry the given "actor" async function until it
@@ -705,8 +877,8 @@ module.exports = {
       // Called by an `@apostrophecms/doc-type:insert` event handler to confirm that the user
       // has the appropriate permissions for the doc's type and content.
       testInsertPermissions(req, doc, options) {
-        if (!(options.permissions === false)) {
-          if (!self.apos.permission.can(req, 'edit', doc)) {
+        if (options.permissions !== false) {
+          if (!self.apos.permission.can(req, 'create', doc)) {
             throw self.apos.error('forbidden');
           }
         }
@@ -785,6 +957,252 @@ module.exports = {
         return self.retryUntilUnique(req, doc, async function () {
           return self.db.insertOne(self.apos.util.clonePermanent(doc));
         });
+      },
+      // Set meta data for a given field, that will be live under `aposMeta`
+      // doc property. It returns the path to the meta property withouth the
+      // key. See `getMetaPath` method for more information.
+      //
+      // Signature:
+      // `apos.doc.setMeta(doc, namespace, [subobject], ...pathComponents, key, value);`
+      // where arguments are as follows:
+      // - `doc`: the document to attach the meta property to.
+      // - `namespace`: the namespace of the meta property, by convention the
+      //   module name that is setting the meta property.
+      // - `subobject`: (optional) the name of the field subobject (e.g. array
+      //   item, widget, or any other field type object that have `_id` property).
+      //   This argument dictates how `pathComponents` are interpreted. If
+      //   `subobject` is not provided, `pathComponents` are interpreted as
+      //   a path starting from `doc`. If `subobject` is provided, `pathComponents`
+      //   are interpreted as a relative path from the `subobject` field.
+      // - `pathComponents`: the dot path to the field value. It can be any number
+      //   of strings with or without dot-separated components. If `subobject` is
+      //   provided, `pathComponents` are interpreted as a relative path from the
+      //   `subobject` field. If `subobject` is not provided, `pathComponents` are
+      //   interpreted as a top-level path. `pathComponents` is optional when
+      //   `subobject` field is provided. This way you can set a meta property
+      //   directly for e.g. array or widget field. See examples below.
+      // - `key`: the key of the meta property. Should be a string. Dot-path is
+      //   not supported, dots will be treated as part of the key. It's prefixed
+      //   automatically with the `namespace` (`namespace:key`) to avoid
+      //   conflicts with other modules.
+      // - `value`: the value of the meta property. Can be any JSON-serializable value.
+      //
+      // The document field metadata can be consumed by admin UI components. See
+      // `schema.addFieldMetadataComponent()` method for more information.
+      //
+      // Examples:
+      // - Set value of a top-level meta property of a generic field (e.g. string,
+      //   number, boolean, etc.):
+      // `apos.doc.setMeta(doc, 'my-module', 'title', 'myMetaKey', 'myMetaValue');`
+      //
+      // - Set value of a top-level meta property of an object field (can be
+      //   further nested):
+      // `apos.doc.setMeta(doc, 'my-module', 'address', 'city', 'myMetaKey', 'myMetaValue');`
+      //
+      // - Set value of a meta property of a field inside of an array field type:
+      // `apos.doc.setMeta(doc, 'my-module', arrayItemObject, 'city', 'myMetaKey', 'myMetaValue');`
+      //
+      // - Set value of a meta property of a rich text widget
+      // `apos.doc.setMeta(doc, 'my-module', widgetObject, 'myMetaKey', 'myMetaValue');`
+      //
+      // - Dots in the `key` are treated as part of the key, dots in `pathComponents`
+      //   are treated as dot-path and are not altered:
+      // `apos.doc.setMeta(doc, 'my-module', 'address', 'city.name', 'myMetaKey.with.dots', 'myMetaValue');`
+      //  will set `doc.aposMeta.address.aposMeta.city.name['my-module:myMetaKey.with.dots']: 'myMetaValue'`.
+      setMeta(doc, namespace, ...pathArgsWithKeyAndValue) {
+        if (!_.isPlainObject(doc) || !namespace) {
+          throw self.apos.error('invalid', 'Valid document and namespace are required.', {
+            cause: 'invalidArguments'
+          });
+        }
+
+        const pathArgs = [ ...pathArgsWithKeyAndValue ];
+        const value = pathArgs.pop();
+        const key = pathArgs.pop();
+
+        if (!key) {
+          throw self.apos.error('invalid', 'Key and value are required.', {
+            cause: 'invalidArguments'
+          });
+        }
+        if (typeof key !== 'string') {
+          throw self.apos.error('invalid', 'Key must be a string.', {
+            cause: 'invalidArguments'
+          });
+        }
+
+        const metaPath = self.getMetaPath(...pathArgs);
+        const metaPathFull = `aposMeta.${metaPath}`;
+        const nsKey = `${namespace}:${key}`;
+
+        const existingValue = _.get(doc, metaPathFull) || {};
+        existingValue[nsKey] = value;
+        _.set(doc, metaPathFull, existingValue);
+
+        return metaPath;
+      },
+      // Get meta data for a given field. It has exactly the same signature as
+      // `setMeta` method, except the last `value` argument.
+      getMeta(doc, namespace, ...pathArgsWithKey) {
+        if (!doc || !namespace) {
+          throw self.apos.error('invalid', 'Document and namespace are required.', {
+            cause: 'invalidArguments'
+          });
+        }
+
+        const pathArgs = [ ...pathArgsWithKey ];
+        const key = pathArgs.pop();
+
+        if (!key) {
+          throw self.apos.error('invalid', 'Key and value are required.', {
+            cause: 'invalidArguments'
+          });
+        }
+        if (typeof key !== 'string') {
+          throw self.apos.error('invalid', 'Key must be a string.', {
+            cause: 'invalidArguments'
+          });
+        }
+        const nsKey = `${namespace}:${key}`;
+
+        return _.get(
+          doc,
+          `aposMeta.${self.getMetaPath(...pathArgs)}`
+        )?.[nsKey];
+      },
+      // Remove meta data key for a given field. It has exactly the same signature as
+      // `setMeta` method, except the last `value` argument.
+      // A cleanup is performed to remove empty meta properties on each call.
+      removeMeta(doc, namespace, ...pathArgsWithKey) {
+        if (!doc || !namespace) {
+          throw self.apos.error('invalid', 'Document and namespace are required.', {
+            cause: 'invalidArguments'
+          });
+        }
+
+        const pathArgs = [ ...pathArgsWithKey ];
+        const key = pathArgs.pop();
+        const metaPath = self.getMetaPath(...pathArgs);
+        const metaPathFull = `aposMeta.${metaPath}`;
+
+        if (!_.has(doc, metaPathFull)) {
+          return;
+        }
+
+        if (!key) {
+          throw self.apos.error('invalid', 'Key and value are required.', {
+            cause: 'invalidArguments'
+          });
+        }
+        if (typeof key !== 'string') {
+          throw self.apos.error('invalid', 'Key must be a string.', {
+            cause: 'invalidArguments'
+          });
+        }
+        const nsKey = `${namespace}:${key}`;
+
+        const existingValue = _.get(doc, metaPathFull) || {};
+        delete existingValue[nsKey];
+        _.set(doc, metaPathFull, existingValue);
+
+        cleanup(doc.aposMeta, 'aposMeta');
+
+        return metaPath;
+
+        function cleanup(object, path) {
+          if (_.isEmpty(object)) {
+            _.unset(object, path);
+            return true;
+          }
+
+          for (const key of Object.keys(object)) {
+            if (key.includes(':')) {
+              return false;
+            }
+            if (!_.isPlainObject(object[key])) {
+              delete object[key];
+              continue;
+            }
+            if (!cleanup(object[key], `${path}.${key}`)) {
+              return false;
+            }
+
+            delete object[key];
+          }
+
+          return true;
+        }
+      },
+      // Get all meta keys for a given field. It has exactly the same signature as
+      // `setMeta` method, except no key/value should be provided.
+      getMetaKeys(doc, namespace, ...pathArgs) {
+        return Object.keys(
+          _.get(
+            doc,
+            `aposMeta.${self.getMetaPath(...pathArgs)}`
+          ) || {}
+        )
+          .filter(key => key.startsWith(`${namespace}:`))
+          .map(key => key.replace(`${namespace}:`, ''));
+      },
+      // Get the meta path for a given field.
+      // Signature:
+      // `apos.doc.getMetaPath([subobject,] ...pathComponents);`
+      // See `setMeta` for more information about `subobject` and `pathComponents` arguments.
+      //
+      // Returns the path to the meta property withouth the namespace and key.
+      // The returned path can be directly used to access or modify the meta property.
+      // It's supported by all meta API methods.
+      //
+      // Example:
+      // ```js
+      // const path = apos.doc.getMetaPath(subobject, 'address', 'city', 'name');
+      // apos.doc.setMeta(doc, ns, path, 'myMetaKey', 'myMetaValue');
+      // apos.doc.getMeta(doc, ns, path, 'myMetaKey');
+      // apos.doc.removeMeta(doc, ns, path, 'myMetaKey');
+      getMetaPath(...pathArgs) {
+        const args = pathArgs
+          .filter(arg => typeof arg !== 'undefined' && arg !== null);
+
+        let subObject;
+        if (_.isPlainObject(args[0])) {
+          subObject = args.shift();
+        }
+
+        if (args.some(arg => typeof arg !== 'string')) {
+          throw self.apos.error('invalid', 'All path components must be strings.', {
+            cause: 'invalidArguments'
+          });
+        }
+        const pathComponents = args.join('.aposMeta.');
+
+        if (!subObject && !pathComponents) {
+          throw self.apos.error(
+            'invalid',
+            'You must provide at least a "subobject" or at least one "pathComponent" string.',
+            { cause: 'invalidArguments' }
+          );
+        }
+
+        if (subObject && !subObject._id) {
+          throw self.apos.error(
+            'invalid',
+            'Provided subobject must have an _id property.',
+            { cause: 'subObjectNoId' }
+          );
+        }
+
+        if (!subObject) {
+          return pathComponents;
+        }
+
+        const metaPath = [];
+        metaPath.push(`@${subObject._id}`);
+        if (pathComponents) {
+          metaPath.push(`aposMeta.${pathComponents}`);
+        }
+
+        return metaPath.join('.');
       },
 
       // Given either an id (as a string) or a criteria
@@ -910,12 +1328,12 @@ module.exports = {
           _id: tabId,
           updatedAt: new Date()
         };
-        const result = await self.db.updateOne(criteria, {
+        const { result } = await self.db.updateOne(criteria, {
           $set: {
             advisoryLock: doc.advisoryLock
           }
         });
-        if (!result.result.nModified) {
+        if (!result.nModified) {
           const info = await self.db.findOne({
             _id
           }, {
@@ -994,34 +1412,124 @@ module.exports = {
           'slug'
         ];
       },
-      // Add context menu operation to be used in AposDocContextMenu.
-      // Expected operation format is:
+
+      // Add a context menu operation to be offered in AposDocContextMenu, the
+      // "kebab menu" that provides extra operations on the current document or
+      // a document listed in a manager modal.
+      //
+      // The required format is:
+      //
       // {
       //   context: 'update',
       //   action: 'someAction',
       //   modal: 'ModalComponent',
-      //   label: 'Context Menu Label'
+      //   label: 'Context Menu Item Label',
+      //   conditions: ['canEdit'],
+      //   moduleName: 'some-specific-module'
       // }
-      // All properties are required.
-      // The only supported `context` for now is `update`.
-      // `action` is the operation idefntifier and should be globally unique.
-      // Overriding existing custom actions is possible (the last wins).
-      // `modal` is the name of the modal component to be opened.
-      // `label` is the menu label to be shown when expanding the context menu.
-      // Additional optional `modifiers` property is supported - button modifiers
+      //
+      // All properties are required except for `conditions`, `moduleName`,
+      // `modifiers` and `manuallyPublished`.
+      //
+      // Context operations are universal, e.g. they are displayed by the context
+      // menu no matter what the content type is, unless overridden by `conditions`.
+      //
+      // `action` is the operation identifier and should be globally unique.
+      // For convenience, if several modules add an operation with the same `action`,
+      // it is only added once. This prevents duplicates if all subclasses of
+      // `doc-type` or `piece-type` register the same operation.
+      //
+      // `context` currently must be `update`.
+      //
+      // `modal` is the name of the modal component to be opened by the operation.
+      //
+      // `label` is the menu item label to be shown when expanding the context menu.
+      //
+      // An additional `moduleName` property is supported. If it is not given,
+      // it will be inferred from the `type` of the document in context, with all page
+      // types using the page module (not their type-specific module). This is almost
+      // always correct, therefore it only makes sense to pass an explicit
+      // `moduleName` option here if the action API should be invoked on a different module
+      // than expected.
+      //
+      // An additional optional `modifiers` property is supported - button modifiers
       // as supported by `AposContextMenu` (e.g. modifiers: [ 'danger' ]).
+      //
       // An optional `manuallyPublished` boolean property is supported - if true
       // the menu will be shown only for docs which have `autopublish: false` and
       // `localized: true` options.
-      addContextOperation(moduleName, operation) {
+      //
+      // `conditions` defines the circumstances under which the opetion should be displayed.
+      // If all `conditions` are not met, the item is not displayed for this particular
+      // document.
+      //
+      // `conditions` may be an array containing one or multiple of these values:
+      //
+      // 'canPublish', 'canEdit', 'canDismissSubmission', 'canDiscardDraft',
+      // 'canLocalize', 'canArchive', 'canUnpublish', 'canCopy', 'canRestore',
+      // 'canCreate', 'canPreview', 'canShareDraft'
+
+      addContextOperation(operation) {
+        if (arguments.length === 2) {
+          // For backwards compatibility. `moduleName` is rarely needed
+          // so it should not be a separate argument in new code.
+          operation = {
+            ...arguments[1],
+            moduleName: arguments[0]
+          };
+        }
+        validate(operation);
         self.contextOperations = [
           ...self.contextOperations
             .filter(op => op.action !== operation.action),
-          {
-            ...operation,
-            moduleName
-          }
+          operation
         ];
+
+        function validate ({
+          action, context, type = 'modal', label, modal, conditions, if: ifProps
+        }) {
+          const allowedConditions = [
+            'canPublish',
+            'canEdit',
+            'canDismissSubmission',
+            'canDiscardDraft',
+            'canLocalize',
+            'canArchive',
+            'canUnpublish',
+            'canCopy',
+            'canRestore',
+            'canCreate',
+            'canPreview',
+            'canShareDraft'
+          ];
+
+          if (![ 'event', 'modal' ].includes(type)) {
+            throw self.apos.error('invalid', '`type` option must be `modal` (default) or `event`');
+          }
+
+          if (!action || !context || !label || (type === 'modal' && !modal)) {
+            throw self.apos.error('invalid', 'addContextOperation requires action, context, label and modal (if type is set to `modal` or unset) properties.');
+          }
+
+          if (
+            conditions &&
+            (!Array.isArray(conditions) ||
+            conditions.some((perm) => !allowedConditions.includes(perm)))
+          ) {
+            throw self.apos.error(
+              'invalid', `The conditions property in addContextOperation must be an array containing one or multiple of these values:\n\t${allowedConditions.join('\n\t')}.`
+            );
+          }
+
+          if (
+            ifProps &&
+            (typeof ifProps !== 'object' || Array.isArray(ifProps))
+          ) {
+            throw self.apos.error(
+              'invalid', 'The if property in addContextOperation must be an object containing properties and values that will be checked against the current document in order to show or not the context operation.'
+            );
+          }
+        }
       },
       getBrowserData(req) {
         return {
@@ -1087,8 +1595,9 @@ module.exports = {
       normalizeType(type) {
         if (type === '@apostrophecms/page') {
           // Backwards compatible
-          type = '@apostrophecms/any-page-type';
+          return '@apostrophecms/any-page-type';
         }
+
         return type;
       },
       // Given a doc, an _id, or an aposDocId, this method
@@ -1125,12 +1634,17 @@ module.exports = {
           });
           (page._children || []).forEach(pushParkedPageAndParkedChildren);
         }
-        const pieceModules = Object.values(self.apos.modules).filter(module => self.apos.instanceOf(module, '@apostrophecms/piece-type') && module.options.replicate);
-        for (const module of pieceModules) {
+        const pieceModules = Object.values(self.apos.modules)
+          .filter(pieceModule =>
+            self.apos.instanceOf(pieceModule, '@apostrophecms/piece-type') &&
+            pieceModule.options.replicate
+          );
+        for (const pieceModule of pieceModules) {
           criteria.push({
-            type: module.name
+            type: pieceModule.name
           });
         }
+        self.replicateReached = true;
         // Include the criteria array in the event so that more entries can be pushed to it
         await self.emit('beforeReplicate', criteria);
         // We can skip the core work of this method if there is only one locale,
@@ -1164,9 +1678,9 @@ module.exports = {
               }).archived(null).toObject();
               for (const locale of localeNames) {
                 if (!existing.find(doc => doc.aposLocale === locale)) {
-                  const module = self.getManager(sourceDoc.type);
-                  const localized = await module.localize(req, sourceDoc, locale);
-                  await module.publish(req.clone({ locale }), localized);
+                  const manager = self.getManager(sourceDoc.type);
+                  const localized = await manager.localize(req, sourceDoc, locale);
+                  await manager.publish(req.clone({ locale }), localized);
                 }
               }
             }
@@ -1199,7 +1713,7 @@ module.exports = {
           }
           for (const widget of area.items || []) {
             if ((!widget._id) || seen.has(widget._id)) {
-              widget._id = cuid();
+              widget._id = createId();
             } else {
               seen.add(widget._id);
             }
@@ -1236,14 +1750,13 @@ module.exports = {
         }
 
         function forSchema(schema, doc) {
+          if (!doc) {
+            return;
+          }
           for (const field of schema) {
             if (field.type === 'area' && doc[field.name] && doc[field.name].items) {
               for (const widget of doc[field.name].items) {
-                self.walkByMetaType(widget, {
-                  arrayItem: handlers.arrayItem,
-                  object: handlers.object,
-                  relationship: handlers.relationship
-                });
+                self.walkByMetaType(widget, handlers);
               }
             } else if (field.type === 'array') {
               if (doc[field.name]) {
@@ -1254,31 +1767,22 @@ module.exports = {
               }
             } else if (field.type === 'object') {
               const value = doc[field.name];
-              if (value) {
-                handlers.object(field, value);
-                forSchema(field.schema, value);
-              }
+              handlers.object(field, value);
+              forSchema(field.schema, value);
             } else if (field.type === 'relationship') {
-              if (Array.isArray(doc[field.name])) {
-                handlers.relationship(field, doc);
-              }
+              handlers.relationship(field, doc);
             }
           }
         }
       },
-      // Add the "cacheInvalidatedAt" field to the documents that do not have it yet,
-      // and set it to equal doc.updatedAt.
-      setCacheField() {
-        return self.apos.migration.eachDoc({ cacheInvalidatedAt: { $exists: 0 } }, 5, async doc => {
-          await self.apos.doc.db.updateOne({ _id: doc._id }, {
-            $set: { cacheInvalidatedAt: doc.updatedAt }
-          });
-        });
+
+      async bestAposDocId(criteria) {
+        const existing = await self.apos.doc.db.findOne(criteria, { projection: { aposDocId: 1 } });
+        return existing?.aposDocId || self.apos.util.generateId();
       },
-      addCacheFieldMigration() {
-        self.apos.migration.add('add-cache-invalidated-at-field', self.setCacheField);
-      },
-      ...require('./lib/legacy-migrations')(self)
+
+      ...require('./lib/legacy-migrations')(self),
+      ...require('./lib/migrations')(self)
     };
   }
 };

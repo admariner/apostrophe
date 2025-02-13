@@ -15,6 +15,7 @@
             label: $t(contextMenuOptions.menu[0].label)
           }"
           :disabled="field && field.readOnly"
+          :disable-focus="false"
           type="primary"
           :icon="icon"
           @click="add({ index: 0, name: contextMenuOptions.menu[0].name })"
@@ -22,7 +23,6 @@
       </template>
       <template v-else>
         <AposAreaMenu
-          @add="add"
           :context-menu-options="contextMenuOptions"
           :empty="true"
           :index="0"
@@ -30,24 +30,30 @@
           :max-reached="maxReached"
           :disabled="field && field.readOnly"
           :widget-options="options.widgets"
+          :tabbable="true"
+          @add="add"
         />
       </template>
     </div>
     <div class="apos-areas-widgets-list">
       <AposAreaWidget
         v-for="(widget, i) in next"
-        :area-id="areaId"
         :key="widget._id"
+        :area-id="areaId"
         :widget="widget"
+        :meta="meta[widget._id]"
         :generation="generation"
         :i="i"
         :options="options"
         :next="next"
+        :following-values="followingValues"
         :doc-id="docId"
         :context-menu-options="contextMenuOptions"
         :field-id="fieldId"
+        :field="field"
         :disabled="field && field.readOnly"
         :widget-hovered="hoveredWidget"
+        :non-foreign-widget-hovered="hoveredNonForeignWidget"
         :widget-focused="focusedWidget"
         :max-reached="maxReached"
         :rendering="rendering(widget)"
@@ -66,9 +72,10 @@
 </template>
 
 <script>
-import cuid from 'cuid';
+import { createId } from '@paralleldrive/cuid2';
 import { klona } from 'klona';
 import AposThemeMixin from 'Modules/@apostrophecms/ui/mixins/AposThemeMixin';
+import newInstance from 'apostrophe/modules/@apostrophecms/schema/lib/newInstance.js';
 
 export default {
   name: 'AposAreaEditor',
@@ -108,6 +115,18 @@ export default {
         return [];
       }
     },
+    meta: {
+      type: Object,
+      default() {
+        return {};
+      }
+    },
+    followingValues: {
+      type: Object,
+      default() {
+        return {};
+      }
+    },
     choices: {
       type: Array,
       required: true
@@ -132,9 +151,10 @@ export default {
       addWidgetEditor: null,
       addWidgetOptions: null,
       addWidgetType: null,
-      areaId: cuid(),
+      areaId: createId(),
       next: this.getValidItems(),
       hoveredWidget: null,
+      hoveredNonForeignWidget: null,
       focusedWidget: null,
       contextMenuOptions: {
         menu: this.choices
@@ -208,22 +228,22 @@ export default {
     }
   },
   mounted() {
-    apos.bus.$on('area-updated', this.areaUpdatedHandler);
-    apos.bus.$on('widget-hover', this.updateWidgetHovered);
-    apos.bus.$on('widget-focus', this.updateWidgetFocused);
     this.bindEventListeners();
   },
-  beforeDestroy() {
-    apos.bus.$off('area-updated', this.areaUpdatedHandler);
-    apos.bus.$off('widget-hover', this.updateWidgetHovered);
-    apos.bus.$off('widget-focus', this.updateWidgetFocused);
+  beforeUnmount() {
     this.unbindEventListeners();
   },
   methods: {
     bindEventListeners() {
+      apos.bus.$on('area-updated', this.areaUpdatedHandler);
+      apos.bus.$on('widget-hover', this.updateWidgetHovered);
+      apos.bus.$on('widget-focus', this.updateWidgetFocused);
       window.addEventListener('keydown', this.focusParentEvent);
     },
     unbindEventListeners() {
+      apos.bus.$off('area-updated', this.areaUpdatedHandler);
+      apos.bus.$off('widget-hover', this.updateWidgetHovered);
+      apos.bus.$off('widget-focus', this.updateWidgetFocused);
       window.removeEventListener('keydown', this.focusParentEvent);
     },
     areaUpdatedHandler(area) {
@@ -239,11 +259,14 @@ export default {
         apos.bus.$emit('widget-focus-parent', this.focusedWidget);
       }
     },
-    updateWidgetHovered(widgetId) {
-      this.hoveredWidget = widgetId;
+    updateWidgetHovered({ _id, nonForeignId }) {
+      this.hoveredWidget = _id;
+      this.hoveredNonForeignWidget = nonForeignId;
     },
     updateWidgetFocused(widgetId) {
       this.focusedWidget = widgetId;
+      // Attached to window so that modals can see the area is active
+      window.apos.focusedWidget = widgetId;
     },
     async up(i) {
       if (this.docId === window.apos.adminBar.contextId) {
@@ -358,13 +381,17 @@ export default {
       if (!this.widgetIsContextual(widget.type)) {
         const componentName = this.widgetEditorComponent(widget.type);
         apos.area.activeEditor = this;
+        apos.bus.$on('apos-refreshing', cancelRefresh);
         const result = await apos.modal.execute(componentName, {
-          value: widget,
-          options: this.options.widgets[widget.type],
+          modelValue: widget,
+          options: this.widgetOptionsByType(widget.type),
           type: widget.type,
-          docId: this.docId
+          docId: this.docId,
+          parentFollowingValues: this.followingValues,
+          meta: this.meta[widget._id]?.aposMeta
         });
         apos.area.activeEditor = null;
+        apos.bus.$off('apos-refreshing', cancelRefresh);
         if (result) {
           return this.update(result);
         }
@@ -382,7 +409,7 @@ export default {
     // Regenerate all array item, area, object and widget ids so they are considered
     // new. Useful when copying a widget with nested content.
     regenerateIds(schema, object) {
-      object._id = cuid();
+      object._id = createId();
       for (const field of schema) {
         if (field.type === 'array') {
           for (const item of (object[field.name] || [])) {
@@ -392,7 +419,7 @@ export default {
           this.regenerateIds(field.schema, object[field.name] || {});
         } else if (field.type === 'area') {
           if (object[field.name]) {
-            object[field.name]._id = cuid();
+            object[field.name]._id = createId();
             for (const item of (object[field.name].items || [])) {
               const schema = apos.modules[apos.area.widgetManagers[item.type]].schema;
               this.regenerateIds(schema, item);
@@ -404,6 +431,10 @@ export default {
       }
     },
     async update(widget) {
+      widget.aposPlaceholder = false;
+      if (!widget.metaType) {
+        widget.metaType = 'widget';
+      }
       if (this.docId === window.apos.adminBar.contextId) {
         apos.bus.$emit('context-edited', {
           [`@${widget._id}`]: widget
@@ -434,9 +465,18 @@ export default {
       } else if (this.widgetIsContextual(name)) {
         return this.insert({
           widget: {
-            _id: cuid(),
             type: name,
-            ...this.contextualWidgetDefaultData(name)
+            ...this.contextualWidgetDefaultData(name),
+            aposPlaceholder: this.widgetHasPlaceholder(name)
+          },
+          index
+        });
+      } else if (!this.widgetHasInitialModal(name)) {
+        const widget = this.newWidget(name);
+        return this.insert({
+          widget: {
+            ...widget,
+            aposPlaceholder: this.widgetHasPlaceholder(name)
           },
           index
         });
@@ -444,10 +484,11 @@ export default {
         const componentName = this.widgetEditorComponent(name);
         apos.area.activeEditor = this;
         const widget = await apos.modal.execute(componentName, {
-          value: null,
+          modelValue: null,
           options: this.widgetOptionsByType(name),
           type: name,
-          docId: this.docId
+          docId: this.docId,
+          parentFollowingValues: this.followingValues
         });
         apos.area.activeEditor = null;
         if (widget) {
@@ -475,7 +516,10 @@ export default {
     },
     async insert({ index, widget }) {
       if (!widget._id) {
-        widget._id = cuid();
+        widget._id = createId();
+      }
+      if (!widget.metaType) {
+        widget.metaType = 'widget';
       }
       const push = {
         $each: [ widget ]
@@ -501,6 +545,12 @@ export default {
     },
     widgetIsContextual(type) {
       return this.moduleOptions.widgetIsContextual[type];
+    },
+    widgetHasPlaceholder(type) {
+      return this.moduleOptions.widgetHasPlaceholder[type];
+    },
+    widgetHasInitialModal(type) {
+      return this.moduleOptions.widgetHasInitialModal[type];
     },
     widgetEditorComponent(type) {
       return this.moduleOptions.components.widgetEditors[type];
@@ -542,22 +592,35 @@ export default {
         }
         return window.apos.modules[`${item.type}-widget`];
       });
+    },
+    // Return a new widget object in which defaults are fully populated,
+    // especially valid sub-area objects, so that nested edits work on the page
+    newWidget(type) {
+      const schema = apos.modules[apos.area.widgetManagers[type]].schema;
+      const widget = {
+        ...newInstance(schema),
+        type
+      };
+      return widget;
     }
   }
 };
 
+function cancelRefresh(refreshOptions) {
+  refreshOptions.refresh = false;
+}
 </script>
 
 <style lang="scss" scoped>
 .apos-empty-area {
   display: flex;
-  padding: 30px;
-  justify-content: center;
-  align-items: center;
   flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 30px;
+  border: 1px solid var(--a-base-8);
   min-height: 50px;
   background-color: var(--a-base-9);
-  border: 1px solid var(--a-base-8);
   border-radius: var(--a-border-radius);
 }
 

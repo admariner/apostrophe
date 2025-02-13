@@ -1,23 +1,44 @@
 <template>
   <AposInputWrapper
-    :modifiers="modifiers" :field="field"
-    :error="effectiveError" :uid="uid"
+    :modifiers="modifiers"
+    :field="field"
+    :error="effectiveError"
+    :uid="uid"
     :display-options="displayOptions"
   >
+    <template v-if="isMicro" #info>
+      <div
+        class="apos-range__value"
+        aria-hidden="true"
+      >
+        <AposIndicator
+          v-if="isSet"
+          class="apos-range__clear"
+          icon="close-icon"
+          @click="unset"
+        />
+        <div class="apos-range__value-input">
+          <span v-if="isSet">
+            {{ valueLabel }}
+          </span>
+        </div>
+      </div>
+    </template>
     <template #body>
       <div class="apos-input-wrapper">
-        <div class="apos-range" v-apos-tooltip="tooltip">
+        <div v-apos-tooltip="tooltip" class="apos-range">
           <input
+            :id="uid"
+            ref="range"
+            v-model.number="next"
             type="range"
             :min="field.min"
             :max="field.max"
             :step="field.step"
             class="apos-range__input"
-            v-model="next"
-            :id="uid"
             :disabled="field.readOnly"
           >
-          <div class="apos-range__scale">
+          <div v-if="!isMicro" class="apos-range__scale">
             <span>
               <span class="apos-sr-only">
                 {{ $t('apostrophe:minLabel') }}
@@ -33,13 +54,15 @@
           </div>
         </div>
         <div
+          v-if="!isMicro"
           class="apos-range__value"
           aria-hidden="true"
           :class="{'apos-is-unset': !isSet}"
         >
           {{ valueLabel }}
           <AposButton
-            type="quiet" label="apostrophe:clear"
+            type="quiet"
+            label="apostrophe:clear"
             class="apos-range__clear"
             :modifiers="['no-motion']"
             @click="unset"
@@ -51,88 +74,66 @@
 </template>
 
 <script>
-import AposInputMixin from 'Modules/@apostrophecms/schema/mixins/AposInputMixin';
-
+import AposInputRangeLogic from '../logic/AposInputRange';
 export default {
   name: 'AposInputRange',
-  mixins: [ AposInputMixin ],
-  data() {
-    return {
-      unit: this.field.unit || ''
-    };
-  },
-  computed: {
-    minLabel() {
-      return this.field.min + this.unit;
-    },
-    maxLabel() {
-      return this.field.max + this.unit;
-    },
-    valueLabel() {
-      return this.next + this.unit;
-    },
-    isSet() {
-      // Detect whether or not a range is currently unset
-      // Use this flag to hide/show UI elements
-      if (this.next >= this.field.min) {
-        return true;
-      } else {
-        return false;
-      }
-    }
-  },
-  mounted() {
-    // The range spec defaults to a value of midway between the min and max
-    // Example: a range with an unset value and a min of 0 and max of 100 will become 50
-    // This does not allow ranges to go unset :(
-    if (!this.next) {
-      this.unset();
-    }
-  },
-  methods: {
-    // Default to a value outside the range, to be used as a flag.
-    // The value will be set to null later in validation
-    unset() {
-      this.next = this.field.min - 1;
-    },
-    validate(value) {
-      if (this.field.required) {
-        if (!value) {
-          return 'required';
-        }
-      }
-      return false;
-    },
-    convert(value) {
-      return parseFloat(value);
-    }
-  }
+  mixins: [ AposInputRangeLogic ]
 };
 </script>
 
 <style lang="scss" scoped>
+  $track-height: 5px;
+  $thumb-size: 15px;
+
   .apos-input-wrapper {
     @include type-base;
-    display: flex;
-    justify-content: space-between;
-    align-content: flex-start;
+
+    & {
+      display: flex;
+      place-content: flex-start space-between;
+    }
   }
 
   .apos-range__value {
-    padding-top: 7px;
     min-width: 100px;
+
     &.apos-is-unset {
       opacity: 0;
       pointer-events: none;
     }
-    .apos-range__clear {
-      margin-left: 5px;
+
+    .apos-field--micro & {
+      display: flex;
+      padding-top: 0;
+      min-width: auto;
+    }
+  }
+
+  .apos-range__value-input {
+    display: inline-flex;
+    box-sizing: border-box;
+    align-items: center;
+    padding: 5px 0 5px 5px;
+    border-radius: 5px;
+    min-height: 25px;
+  }
+
+  .apos-range__clear {
+    margin-left: 5px;
+
+    .apos-field--micro & {
+      cursor: pointer;
+      margin-left: 0;
     }
   }
 
   .apos-range {
     flex-grow: 1;
     margin-right: 20px;
+
+    .apos-field--micro & {
+      margin-right: 0;
+    }
   }
 
   .apos-range__scale {
@@ -143,93 +144,93 @@ export default {
 
   .apos-range__scale {
     @include type-small;
-    color: var(--a-base-4);
-    transition: color 0.5s ease;
+
+    & {
+      color: var(--a-base-4);
+      transition: color 500ms ease;
+    }
   }
 
   // adapted from http://danielstern.ca/range.css/#/
   .apos-range__input {
     width: 100%;
+    height: $track-height;
     margin: 5px 0;
-    background-color: transparent;
+    background: var(--a-base-8);
+    background-image: linear-gradient(var(--a-primary), var(--a-primary));
+    background-size: 70% 100%;
+    background-repeat: no-repeat;
     /* stylelint-disable-next-line property-no-vendor-prefix */
     -webkit-appearance: none;
-    transition: all 0.3s ease;
+    border-radius: 5px;
+
     &:focus {
       outline: none;
+
       & + .apos-range__scale {
         color: var(--a-text-primary);
       }
     }
-  }
 
-  .apos-range__input[disabled] {
-    cursor: not-allowed;
+    &[disabled] {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    .apos-field--micro {
+      margin: 0;
+    }
   }
 
   .apos-range__input::-webkit-slider-runnable-track {
     width: 100%;
-    height: 5px;
-    border: 1px solid var(--a-base-4);
-    background: var(--a-base-7);
-    border-radius: 25px;
+    height: $track-height;
+    border: none;
+    background: transparent;
+    /* stylelint-disable-next-line property-no-vendor-prefix */
+    -webkit-appearance: none;
+    box-shadow: none;
+    border-radius: $track-height;
     cursor: pointer;
-  }
-
-  .apos-range__input::-webkit-progress-value {
-    background: var(--a-primary);
-  }
-
-  .apos-range__input[disabled]::-webkit-progress-value {
-    background: var(--a-primary-light-40);
   }
 
   .apos-range__input::-webkit-slider-thumb {
-    margin-top: -6px;
-    width: 15px;
-    height: 15px;
-    border: 1px solid var(--a-primary-dark-15);
-    border-radius: 50%;
+    width: $thumb-size;
+    height: $thumb-size;
+    margin-top: -4.5px;
+    border: 2px solid var(--a-base-7);
     background: var(--a-primary);
-    cursor: pointer;
+    border-radius: $track-height * 2;
+    cursor: ew-resize;
     /* stylelint-disable-next-line property-no-vendor-prefix */
     -webkit-appearance: none;
   }
-  .apos-range__input[disabled]::-webkit-slider-thumb {
-    background: var(--a-primary-light-40);
-  }
 
   .apos-range__input:focus::-webkit-slider-runnable-track {
-    border: 1px solid var(--a-base-3);
-    background: var(--a-base-6);
+    border: none;
   }
 
   .apos-range__input::-moz-range-track {
-    border-radius: 25px;
+    border-radius: $track-height * 2;
     width: 100%;
-    height: 5px;
-    border: 1px solid var(--a-base-4);
-    background: var(--a-base-7);
+    height: $track-height;
+    border: none;
+    background: transparent;
     cursor: pointer;
   }
 
   .apos-range__input::-moz-range-thumb {
-    width: 15px;
-    height: 15px;
-    border: 1px solid var(--a-primary-dark-15);
+    width: $thumb-size;
+    height: $thumb-size;
+    border: 2px solid var(--a-base-7);
     background: var(--a-primary);
-    border-radius: 50%;
+    border-radius: $track-height * 2;
     cursor: pointer;
-  }
-
-  .apos-range__input[disabled]::moz-range-thumb {
-    background: var(--a-primary-light-40);
-    cursor: not-allowed;
   }
 
   .apos-range__input::-ms-track {
     width: 100%;
-    height: 5px;
+    height: $track-height;
     color: transparent;
     background: transparent;
     border-color: transparent;
@@ -237,38 +238,31 @@ export default {
     cursor: pointer;
   }
 
-  .apos-range__input::-ms-fill-lower {
-    border: 1px solid var(--a-base-4);
-    border-radius: 50px;
-    background: var(--a-base-7);
-  }
-
+  .apos-range__input::-ms-fill-lower,
   .apos-range__input::-ms-fill-upper {
     border: 1px solid var(--a-base-4);
-    background: var(--a-base-7);
     border-radius: 50px;
+    background: var(--a-base-7);
   }
 
   .apos-range__input::-ms-thumb {
-    width: 15px;
-    height: 15px;
-    border: 1px solid var(--a-primary-dark-15);
-    border-radius: 1px;
-    background: var(--a-primary);
-    cursor: pointer;
+    width: $thumb-size;
+    height: $thumb-size;
     margin-top: 0;
+    border: 1px solid var(--a-base-7);
+    background: var(--a-primary);
+    border-radius: 1px;
+    cursor: pointer;
   }
 
-  .apos-range__input[disabled]::-ms-thumb {
-    background: var(--a-primary-light-40);
-    cursor: not-allowed;
-  }
-
-  .apos-range__input:focus::-ms-fill-lower {
-    background: var(--a-base-7);
-  }
-
+  .apos-range__input:focus::-ms-fill-lower,
   .apos-range__input:focus::-ms-fill-upper {
     background: var(--a-base-7);
+  }
+
+  .apos-field--micro {
+    .apos-range__input {
+      height: 2px;
+    }
   }
 </style>

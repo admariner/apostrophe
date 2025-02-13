@@ -1,40 +1,50 @@
 <template>
   <AposInputWrapper
-    :modifiers="modifiers" :field="field"
-    :error="effectiveError" :uid="uid"
+    :modifiers="modifiers"
+    :field="field"
+    :error="effectiveError"
+    :uid="uid"
     :display-options="displayOptions"
   >
     <template #body>
       <div :class="classList">
         <input
-          class="apos-sr-only apos-boolean__input apos-boolean__input--true"
-          type="radio" :id="`${uid}-true`"
-          :value="true" @change="setValue(true)"
-          :checked="value.data === true"
-          :disabled="field.readOnly"
+          :id="`${uid}-true`"
           ref="true"
+          class="apos-sr-only apos-boolean__input apos-boolean__input--true"
+          type="radio"
+          :value="true"
+          :checked="modelValue.data === true"
+          :disabled="field.readOnly"
+          @change="setValue(true)"
         >
         <label :for="`${uid}-true`" class="apos-boolean__label apos-input">
           <circle-icon
-            :size="12" class="apos-boolean__icon"
-            title="" v-show="!field.toggle"
+            v-show="!field.toggle"
+            :size="12"
+            class="apos-boolean__icon"
+            title=""
           />
-          {{ trueLabel || 'Yes' }}
+          {{ trueLabel || $t('apostrophe:yes') }}
         </label>
         <input
-          class="apos-sr-only apos-boolean__input apos-boolean__input--false"
-          type="radio" :id="`${uid}-false`"
-          :value="false" @change="setValue(false)"
-          :checked="value.data === false"
-          :disabled="field.readOnly"
+          :id="`${uid}-false`"
           ref="false"
+          class="apos-sr-only apos-boolean__input apos-boolean__input--false"
+          type="radio"
+          :value="false"
+          :checked="modelValue.data === false"
+          :disabled="field.readOnly"
+          @change="setValue(false)"
         >
         <label :for="`${uid}-false`" class="apos-boolean__label apos-input">
           <circle-icon
-            :size="12" class="apos-boolean__icon"
-            title="" v-show="!field.toggle"
+            v-show="!field.toggle"
+            :size="12"
+            class="apos-boolean__icon"
+            title=""
           />
-          {{ falseLabel || 'No' }}
+          {{ falseLabel || $t('apostrophe:no') }}
         </label>
       </div>
     </template>
@@ -42,52 +52,10 @@
 </template>
 
 <script>
-import AposInputMixin from 'Modules/@apostrophecms/schema/mixins/AposInputMixin';
-
+import AposInputBooleanLogic from '../logic/AposInputBoolean';
 export default {
   name: 'AposInputBoolean',
-  mixins: [ AposInputMixin ],
-  computed: {
-    classList: function () {
-      return [
-        'apos-input-wrapper',
-        'apos-boolean',
-        {
-          'apos-boolean--toggle': this.field.toggle
-        }
-      ];
-    },
-    trueLabel: function () {
-      if (this.field.toggle && this.field.toggle.true &&
-        typeof this.field.toggle.true === 'string') {
-        return this.field.toggle.true;
-      } else {
-        return false;
-      }
-    },
-    falseLabel: function () {
-      if (this.field.toggle && this.field.toggle &&
-        typeof this.field.toggle.false === 'string') {
-        return this.field.toggle.false;
-      } else {
-        return false;
-      }
-    }
-  },
-  methods: {
-    setValue(val) {
-      this.next = val;
-      this.$refs[(!val).toString()].checked = false;
-    },
-    validate(value) {
-      if (this.field.required) {
-        if (!value && value !== false) {
-          return 'required';
-        }
-      }
-      return false;
-    }
-  }
+  mixins: [ AposInputBooleanLogic ]
 };
 </script>
 
@@ -103,12 +71,12 @@ export default {
   }
 
   .apos-boolean__label {
-    min-width: 0;
     position: relative;
     display: flex;
-    justify-content: center;
     align-items: center;
+    justify-content: center;
     padding: math.div($boolean-padding, 2) $boolean-padding;
+    min-width: 0;
 
     &:first-of-type {
       border-top-right-radius: 0;
@@ -149,6 +117,7 @@ export default {
         border-color: var(--a-base-4);
       }
     }
+
     .apos-boolean__input + & {
       &:hover {
         cursor: pointer;
@@ -176,6 +145,7 @@ export default {
       top: 1px;
     }
   }
+
   .apos-boolean__input:focus + .apos-boolean__label {
     border-color: var(--a-base-2);
     box-shadow: 0 0 5px var(--a-base-6);
@@ -188,6 +158,7 @@ export default {
       color: var(--a-base-4);
       background: var(--a-base-7);
       border-color: var(--a-base-4);
+
       &:hover {
         cursor: not-allowed;
         border-color: var(--a-base-4);

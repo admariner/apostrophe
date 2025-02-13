@@ -4,6 +4,34 @@
 //
 // `apos.i18n.i18next` can be used to directly access the `i18next` npm module instance if necessary.
 // It usually is not necessary. Use `req.t` if you need to localize in a route.
+//
+// ## Options
+//
+// ### `locales` TODO
+//
+// ### `defaultLocale` TODO
+//
+// ### `adminLocales`
+//
+// Controls what admin UI language can be set per user. If set, `adminLocale` user field
+// will be automatically added to the user schema.
+// Contains an array of objects with `label` and `value` properties:
+// ```js
+// {
+//   label: 'English',
+//   value: 'en'
+// }
+// ```
+//
+// ### `defaultAdminLocale`
+//
+// The default admin UI language. If `adminLocales` are configured, it should
+// should match a `value` property from the list. Furthermore, it will be used
+// as the default value for the`adminLocale` user field. If it is not set,
+// but `adminLocales` is set, then the default is to display the admin UI
+// in the same language as the website content.
+// Example: `defaultLocale: 'fr'`.
+//
 
 const i18next = require('i18next');
 const fs = require('fs');
@@ -55,6 +83,12 @@ module.exports = {
     self.locales = self.getLocales();
     self.hostnamesInUse = Object.values(self.locales).find(locale => locale.hostname);
     self.defaultLocale = self.options.defaultLocale || Object.keys(self.locales)[0];
+    // Contains label/value object for each locale
+    self.adminLocales = self.options.adminLocales || [];
+    // Contains only the string value of the default admin locale (e.g. 'en').
+    // If adminLocales are configured, it should be one of them. Otherwise,
+    // it can be any valid locale string identifier.
+    self.defaultAdminLocale = self.options.defaultAdminLocale || null;
     // Lint the locale configurations
     for (const [ key, options ] of Object.entries(self.locales)) {
       if (!options) {
@@ -69,6 +103,15 @@ module.exports = {
       if (options.prefix && options.prefix.match(/\/.*?\//)) {
         throw self.apos.error('invalid', `Locale prefixes must not contain more than one forward slash ("/").\nUse hyphens as separators. Check locale "${key}".`);
       }
+    }
+    if (!Array.isArray(self.adminLocales)) {
+      throw self.apos.error('invalid', 'The "adminLocales" option must be an array.');
+    }
+    if (self.defaultAdminLocale && typeof self.defaultAdminLocale !== 'string') {
+      throw self.apos.error('invalid', 'The "defaultAdminLocale" option must be a string.');
+    }
+    if (self.defaultAdminLocale && self.adminLocales.length && !self.adminLocales.some(al => al.value === self.defaultAdminLocale)) {
+      throw self.apos.error('invalid', `The value of "defaultAdminLocale" "${self.defaultAdminLocale}" doesn't match any of the existing "adminLocales" values.`);
     }
     const fallbackLng = [ self.defaultLocale ];
     // In case the default locale also has inadequate admin UI phrases
@@ -202,6 +245,47 @@ module.exports = {
         req.session.cookie = new ExpressSessionCookie(aposExpressModule.sessionOptions.cookie);
         return res.redirect(self.apos.url.build(req.url, { aposCrossDomainSessionToken: null }));
       },
+      // If the `redirectToFirstLocale` option is enabled
+      // and the homepage is requested,
+      // redirects to the first locale configured with the
+      // current requested hostname when all of the locales
+      // configured with that hostname do have a prefix.
+      //
+      // However, if the request does not match any explicit
+      // hostnames assigned to locales, redirects to the first
+      // locale that does not have a configured hostname, if
+      // all the locales without a hostname do have a prefix.
+      redirectToFirstLocale(req, res, next) {
+        if (!self.options.redirectToFirstLocale) {
+          return next();
+        }
+        if (req.path !== '' && req.path !== '/') {
+          return next();
+        }
+
+        const locales = Object.values(
+          self.filterPrivateLocales(req, self.locales)
+        );
+        const localesWithoutHostname = locales.filter(
+          locale => !locale.hostname
+        );
+        const localesWithCurrentHostname = locales.filter(
+          locale => locale.hostname && locale.hostname.split(':')[0] === req.hostname
+        );
+
+        const localesToCheck = localesWithCurrentHostname.length
+          ? localesWithCurrentHostname
+          : localesWithoutHostname;
+
+        if (!localesToCheck.length || !localesToCheck.every(locale => locale.prefix)) {
+          return next();
+        }
+
+        // Add / for home page and to avoid being redirected again in the `locale` middleware:
+        const redirectUrl = `${localesToCheck[0].prefix}/`;
+
+        return res.redirect(redirectUrl);
+      },
       locale(req, res, next) {
         // Support for a single aposLocale query param that
         // also contains the mode, which is likely to occur
@@ -225,7 +309,7 @@ module.exports = {
           // Remove locale prefix so URL parsing can proceed normally from here
           if (req.path === localeOptions.prefix) {
             // Add / for home page
-            return res.redirect(`${req.url}/`);
+            req.redirect = `${req.url}/`;
           }
           if (req.path.substring(0, localeOptions.prefix.length + 1) === localeOptions.prefix + '/') {
             req.path = req.path.replace(localeOptions.prefix, '');
@@ -284,9 +368,25 @@ module.exports = {
   },
   apiRoutes(self) {
     return {
+      get: {
+        locales(req) {
+          return self.locales;
+        },
+        async localesPermissions(req) {
+          const action = self.apos.launder.string(req.query.action);
+          const type = self.apos.launder.string(req.query.type);
+          const locales = self.apos.launder.strings(req.query.locales);
+          const allowed = await self.getLocalesPermissions(req, action, type, locales);
+
+          return allowed;
+        }
+      },
       post: {
         async locale(req) {
           const sanitizedLocale = self.sanitizeLocaleName(req.body.locale);
+          if (!sanitizedLocale) {
+            throw self.apos.error('invalid', 'invalid locale');
+          }
           // Clipboards transferring between locales needs to jump
           // from LocalStorage to the cross-domain session cache
           let clipboard = req.body.clipboard;
@@ -436,7 +536,15 @@ module.exports = {
               self.namespaces[ns].browser = self.namespaces[ns].browser ||
                 (metadata[ns] && metadata[ns].browser);
               const namespaceDir = path.join(localizationsDir, ns);
+              if (!fs.statSync(namespaceDir).isDirectory()) {
+                // Skip non-directory items, such as hidden files
+                continue;
+              }
               for (const localizationFile of fs.readdirSync(namespaceDir)) {
+                if (!localizationFile.endsWith('.json')) {
+                  // Exclude parsing of non-JSON files, like hidden files, in the namespace directory
+                  continue;
+                }
                 const fullLocalizationFile = path.join(namespaceDir, localizationFile);
                 const data = JSON.parse(fs.readFileSync(fullLocalizationFile));
                 const locale = localizationFile.replace('.json', '');
@@ -500,7 +608,7 @@ module.exports = {
       // if the appropriate query parameters were set, rewrite
       // `_id` accordingly. Returns `_id`, after rewriting if appropriate.
       inferIdLocaleAndMode(req, _id) {
-        let [ cuid, locale, mode ] = _id.split(':');
+        let [ id, locale, mode ] = _id.split(':');
         if (locale && mode) {
           if (!req.query.aposLocale) {
             req.locale = locale;
@@ -526,14 +634,17 @@ module.exports = {
           // will be interpreted later
           return _id;
         } else {
-          return `${cuid}:${locale}:${mode}`;
+          return `${id}:${locale}:${mode}`;
         }
       },
       getBrowserData(req) {
+        const adminLocale = req.user?.adminLocale === ''
+          ? req.locale
+          : req.user?.adminLocale || self.defaultAdminLocale || req.locale;
         const i18n = {
-          [req.locale]: self.getBrowserBundles(req.locale)
+          [adminLocale]: self.getBrowserBundles(adminLocale)
         };
-        if (req.locale !== self.defaultLocale) {
+        if (adminLocale !== self.defaultLocale) {
           i18n[self.defaultLocale] = self.getBrowserBundles(self.defaultLocale);
         }
         // In case the default locale also has inadequate admin UI phrases
@@ -543,6 +654,7 @@ module.exports = {
         const result = {
           i18n,
           locale: req.locale,
+          adminLocale,
           defaultLocale: self.defaultLocale,
           defaultNamespace: self.defaultNamespace,
           locales: self.locales,
@@ -561,6 +673,16 @@ module.exports = {
         for (const [ name, options ] of Object.entries(self.namespaces)) {
           if (options.browser) {
             i18n[name] = self.i18next.getResourceBundle(locale, name);
+            if (!i18n[name]) {
+              // Attempt fallback to language only. This is not
+              // the full fallback support of i18next because that
+              // is difficult to tap into when calling getResourceBundle,
+              // but it should work for most situations
+              const [ lang, country ] = locale.split('-');
+              if (country) {
+                i18n[name] = self.i18next.getResourceBundle(lang, name);
+              }
+            }
           }
         }
         return i18n;
@@ -571,8 +693,23 @@ module.exports = {
             label: 'English'
           }
         };
+        for (const locale in locales) {
+          locales[locale]._edit = true;
+        }
         verifyLocales(locales, self.apos.options.baseUrl);
         return locales;
+      },
+      async getLocalesPermissions(req, action, type, locales) {
+        const allowed = [];
+        for (const locale of locales) {
+          const clonedReq = req.clone({
+            locale
+          });
+          if (await self.apos.permission.can(clonedReq, action, type)) {
+            allowed.push(locale);
+          }
+        }
+        return allowed;
       },
       sanitizeLocaleName(locale) {
         locale = self.apos.launder.string(locale);
@@ -616,21 +753,29 @@ module.exports = {
       // if possible, to the corresponding version in toLocale.
       toLocaleRouteFactory(module) {
         return async (req, res) => {
-          const _id = module.inferIdLocaleAndMode(req, req.params._id);
-          const toLocale = req.params.toLocale;
-          const localeReq = req.clone({
-            locale: toLocale
-          });
-          const corresponding = await module.find(localeReq, {
-            _id: `${_id.split(':')[0]}:${localeReq.locale}:${localeReq.mode}`
-          }).toObject();
-          if (!corresponding) {
-            return res.status(404).send('not found');
+          try {
+            const _id = module.inferIdLocaleAndMode(req, req.params._id);
+            const toLocale = self.sanitizeLocaleName(req.params.toLocale);
+            if (!toLocale) {
+              return res.status(400).send('invalid locale name');
+            }
+            const localeReq = req.clone({
+              locale: toLocale
+            });
+            const corresponding = await module.find(localeReq, {
+              _id: `${_id.split(':')[0]}:${localeReq.locale}:${localeReq.mode}`
+            }).toObject();
+            if (!corresponding) {
+              return res.status(404).send('not found');
+            }
+            if (!corresponding._url) {
+              return res.status(400).send('invalid (has no URL)');
+            }
+            return res.redirect(corresponding._url);
+          } catch (e) {
+            self.apos.util.error(e);
+            return res.status(500).send('error');
           }
-          if (!corresponding._url) {
-            return res.status(400).send('invalid (has no URL)');
-          }
-          return res.redirect(corresponding._url);
         };
       },
       // Exclude private locales when logged out
@@ -642,6 +787,454 @@ module.exports = {
               .entries(locales)
               .filter(([ name, options ]) => options.private !== true)
           );
+      },
+      // Rename a locale. This is time consuming and should be
+      // avoided when possible. If `keep` is present it must be set
+      // to either `oldLocale` or `newLocale` and indicates which version
+      // is kept in the event of a conflict
+      async rename(oldLocale, newLocale, { keep } = {}) {
+        let renamed = 0;
+        let kept = 0;
+        if (!oldLocale) {
+          throw new Error('You must specify --old');
+        }
+        if (!newLocale) {
+          throw new Error('You must specify --new');
+        }
+        if (oldLocale === newLocale) {
+          throw new Error('The old and new locales must be different');
+        }
+        if (keep && (!(keep === oldLocale) && !(keep === newLocale))) {
+          throw new Error('--keep must match --old or --new');
+        }
+        const ids = await self.apos.doc.db.find({ aposLocale: new RegExp(`^${self.apos.util.regExpQuote(oldLocale)}:`) }).project({ _id: 1 }).toArray();
+        ({
+          renamed,
+          kept
+        } = await self.apos.doc.changeDocIds(ids.map(doc => [ doc._id, doc._id.replace(`:${oldLocale}`, `:${newLocale}`) ]), {
+          keep: (keep === oldLocale) ? 'old' : (keep === newLocale) ? 'new' : false
+        }));
+        return {
+          renamed,
+          kept
+        };
+      },
+      // Localize a batch of documents.
+      //
+      // The `req.body` object must have properties
+      // - `_ids`: an array of document `_id` values.
+      // - `relatedTypes`: an array of related doc types to be localized in case
+      //    they are found in the batch of documents to localize.
+      // - `toLocales`: an array of locales to localize the documents to.
+      // - `update`: a boolean indicating whether to localize existing related documents.
+      // - `relatedOnly`: a boolean indicating whether to only localize related documents
+      //    and skip the parent documents (`_ids`).
+      //
+      // Automatic translation instructions may be included in the `req.query` object:
+      // - `aposTranslateProvider`: the unique name of the translation provider.
+      // - `aposLocale`: the locale to translate from.
+      // Note that without these instructions, the signal to the automatic translation
+      // service will not be sent.
+      //
+      // `manager` is the `self` object of the module that is localizing the documents.
+      // If the batch is a set of pages, `manager` should be an instance of
+      // `@apostrophecms/page`. For pieces, `manager` should be an instance of
+      // the piece type module.
+      // `reporting` is an optional object that can be used to report progress. See
+      // the `@apostrophecms/job` module for more information.
+      //
+      // The handler will return a log, array of objects with the following properties:
+      // - `id`: the document `_id` value
+      // - `aposId`: the document `aposDocId` value
+      // - `type`: the document type, can be `null` if the document is not found
+      // - `title`: the document title, can be `null` if the document is not found
+      // - `relationship`: the `aposDocId` of the parent document,
+      //    or `false` if the document is the parent.
+      // - `error`: a boolean or string `reason` indicating whether an error
+      //   occurred during localization. If `error` is a string, it will contain
+      //   the error name. See `@apostrophecms/error` and `@apostrophecms/http` modules.
+      // - `detail`: optional string (i18n key) explaining the error.
+      async localizeBatch(req, manager, reporting = null) {
+        if (!req.user) {
+          throw self.apos.error('forbidden');
+        }
+        if (!Array.isArray(req.body._ids)) {
+          throw self.apos.error('invalid');
+        }
+        if (!Array.isArray(req.body.toLocales)) {
+          throw self.apos.error('invalid');
+        }
+
+        const ids = self.apos.launder.ids(req.body._ids)
+          .map(id => self.inferIdLocaleAndMode(req, id));
+        if (reporting) {
+          reporting.setTotal(ids.length);
+        }
+
+        const toLocales = self.apos.launder.strings(req.body.toLocales)
+          .filter(toLocale => !!self.sanitizeLocaleName(toLocale));
+        const update = self.apos.launder.boolean(req.body.update);
+        const relatedTypes = new Set(
+          self.apos.launder.strings(req.body.relatedTypes)
+        );
+        normalizeTypes(relatedTypes);
+        const relatedOnly = self.apos.launder.boolean(req.body.relatedOnly);
+
+        // Result log used for batch reporting
+        const log = [];
+        // Global set to avoid duplicate processing
+        const seen = new Set();
+
+        for (const id of ids) {
+          let doc;
+          try {
+            [ doc ] = await getDocs(req, manager, {
+              ids: [ id ]
+            });
+          } catch (e) {
+            logMissing(id, log, reporting);
+            self.logError(
+              req,
+              'localize-batch-doc-error',
+              'Error finding document',
+              {
+                id,
+                error: e.message,
+                stack: e.stack.split('\n').slice(1).map(line => line.trim())
+              }
+            );
+            continue;
+          }
+          await localizeDoc(
+            req,
+            reporting,
+            {
+              doc,
+              relatedTypes,
+              toLocales,
+              update,
+              relatedOnly,
+              log,
+              seen
+            }
+          );
+        }
+        if (reporting) {
+          reporting.setResults({
+            log,
+            ids
+          });
+        }
+        self.logDebug(req, 'localize-batch-result', 'Batch localization complete', {
+          log,
+          ids
+        });
+        return log;
+
+        // Convert the "any page types" to actual page types
+        async function normalizeTypes(types) {
+          if (types.has('@apostrophecms/page') || types.has('@apostrphecms/any-page-type')) {
+            self.apos.instancesOf('@apostrophecms/page-type')
+              .map(module => module.__meta.name)
+              .forEach(type => types.add(type));
+            types.delete('@apostrophecms/page');
+            types.delete('@apostrophecms/any-page-type');
+          }
+        }
+
+        function logMissing(id, log, reporting) {
+          log.push({
+            _id: id,
+            aposDocId: id.split(':')[0],
+            type: null,
+            title: null,
+            relationship: false,
+            error: 'apostrophe:notFound'
+          });
+          if (reporting) {
+            reporting.failure();
+          }
+        }
+
+        // Get documents for localization
+        async function getDocs(req, manager, { ids }) {
+          if (!ids.length) {
+            return [];
+          }
+          const docs = await manager
+            .findForEditing(req.clone({ mode: 'draft' }), {
+              _id: { $in: ids }
+            })
+            .toArray();
+
+          return docs;
+        }
+
+        // Check if the document can be localized, retrieve related documents
+        // if necessary, and localize the documents to the specified locales.
+        async function localizeDoc(req, reporting, {
+          doc,
+          relatedTypes,
+          toLocales,
+          update,
+          relatedOnly,
+          log = [],
+          seen = new Set()
+        }) {
+          const docs = [];
+          if (seen.has(doc.aposDocId)) {
+            return log;
+          }
+          seen.add(doc.aposDocId);
+          if (!canLocalize(req, doc, false)) {
+            log.push({
+              _id: doc._id,
+              aposDocId: doc.aposDocId,
+              type: doc.type,
+              title: doc.title,
+              relationship: false,
+              error: true
+            });
+            self.logError(
+              req,
+              'localize-batch-can-localize-error',
+              'The document type can\'t be localized or insufficient permissions',
+              {
+                id: doc._id,
+                type: doc.type,
+                title: doc.title,
+                relationship: false
+              }
+            );
+            if (reporting) {
+              reporting.failure();
+            }
+            return log;
+          }
+          if (!relatedOnly) {
+            docs.push(doc);
+          }
+
+          if (relatedTypes.size > 0) {
+            try {
+              await findRelatedDocs(req.clone({ mode: 'draft' }), {
+                doc,
+                schema: self.apos.modules[doc.type].schema,
+                relatedTypes,
+                memo: docs,
+                seen
+              });
+            } catch (e) {
+              self.logError(
+                req,
+                'localize-batch-related-error',
+                'Error finding related documents',
+                {
+                  id: doc._id,
+                  type: doc.type,
+                  title: doc.title,
+                  error: e.message,
+                  stack: e.stack.split('\n').slice(1).map(line => line.trim())
+                }
+              );
+              if (reporting) {
+                reporting.failure();
+              }
+              return log;
+            }
+          }
+
+          let hasError = false;
+          for (const item of docs) {
+            const manager = self.apos.doc.getManager(item.type);
+            // Not using Promise.allSettled because of potential
+            // rate limit issues with external services when i.e.
+            // automatically translating content.
+            // Related info:
+            // https://cookbook.openai.com/examples/how_to_handle_rate_limits
+            for (const locale of toLocales) {
+              const payload = {
+                _id: item._id,
+                aposDocId: item.aposDocId,
+                locale,
+                type: item.type,
+                title: item.title,
+                relationship: item.aposDocId !== doc.aposDocId ? doc.aposDocId : false,
+                error: false
+              };
+              try {
+                await manager.localize(req, item, locale, {
+                  update: !payload.relationship ? true : update,
+                  batch: true
+                });
+                log.push(payload);
+              } catch (e) {
+                hasError = true;
+                payload.error = e.name ?? true;
+                // This is the only detail that we know of.
+                // XXX A better way to handle data sent to the UI as a
+                // human-readable message is a standard error payload property.
+                // For example `error.data.detail`.
+                if (e.data?.parentNotLocalized) {
+                  payload.detail = req.t('apostrophe:parentNotLocalized');
+                } else {
+                  payload.detail = e.data?.detail ? req.t(e.data.detail) : null;
+                }
+                log.push(payload);
+                // Do not flood the logs with errors that are expected
+                const fn = e.name === 'conflict' ? 'logDebug' : 'logError';
+                const id = e.name === 'conflict'
+                  ? 'localize-batch-doc-conflict'
+                  : 'localize-batch-doc-error';
+                self[fn](req, id, {
+                  ...payload,
+                  error: e.message,
+                  reason: e.name,
+                  stack: e.stack.split('\n').slice(1).map(line => line.trim())
+                });
+              }
+            }
+          }
+
+          // Advance the progress bar so that if the main document fails,
+          // the batch progress will report the correct number of failures.
+          // The detailed result should be printed in a custom notification.
+          if (reporting) {
+            const status = hasError
+              ? 'failure'
+              : 'success';
+            reporting[status]();
+          }
+
+          return log;
+        }
+
+        // Find related documents for localization
+        async function findRelatedDocs(req, {
+          doc, schema, relatedTypes, memo, seen
+        }) {
+          if (!schema) {
+            return;
+          }
+
+          const partialDocs = getRelatedBySchema(req, doc, schema, seen)
+            .filter(doc => relatedTypes.has(doc.type))
+            .filter(doc => canLocalize(req, doc, true));
+
+          const idsByType = partialDocs
+            .reduce((acc, doc) => {
+              acc[doc.type] ||= [];
+              acc[doc.type].push(doc._id);
+              return acc;
+            }, {});
+          const promises = Object.entries(idsByType)
+            .map(([ type, ids ]) => {
+              return getDocs(req, self.apos.doc.getManager(type), {
+                ids
+              });
+            });
+          const results = await Promise.allSettled(promises);
+          return results.filter(result => result.status === 'fulfilled')
+            .map(result => {
+              memo.push(...result.value);
+              return result.value;
+            })
+            .flat();
+        }
+
+        // Get related documents by schema
+        function getRelatedBySchema(req, object, schema, seen) {
+          const related = [];
+          for (const field of schema || []) {
+            switch (field.type) {
+              case 'array': {
+                for (const value of (object[field.name] || [])) {
+                  related.push(...getRelatedBySchema(req, value, field.schema, seen));
+                }
+                break;
+              }
+
+              case 'object': {
+                if (object[field.name]) {
+                  related.push(
+                    ...getRelatedBySchema(req, object[field.name], field.schema, seen)
+                  );
+                }
+                break;
+              }
+
+              case 'area': {
+                for (const widget of (object[field.name]?.items || [])) {
+                  related.push(
+                    ...getRelatedBySchema(
+                      req,
+                      widget,
+                      self.apos.modules[`${widget?.type}-widget`]?.schema || [],
+                      seen
+                    )
+                  );
+                }
+                break;
+              }
+
+              case 'relationship': {
+                for (const item of (object[field.name] || [])) {
+                  const id = item._id?.split(':')[0];
+                  if (!id || seen.has(id)) {
+                    continue;
+                  }
+                  related.push(item);
+                  seen.add(id);
+                }
+                break;
+              }
+
+              default:
+                // No-op
+                break;
+            }
+          }
+
+          return related;
+        }
+
+        // Filter out related doc types that opt out completely (pages should
+        // never be considered "related" to other pages simply because
+        // of navigation links, the feature is meant for pieces that feel more like
+        // part of the document being localized)
+        // We also remove non localized content like users and check for permissions.
+        function canLocalize(req, doc, related) {
+          if (!self.apos.modules[doc.type]) {
+            return false;
+          }
+          if (self.apos.modules[doc.type].options?.localized === false) {
+            return false;
+          }
+          if (related && self.apos.modules[doc.type].options?.relatedDocument === false) {
+            return false;
+          }
+          return self.apos.permission.can(req, 'edit', doc.type);
+        }
+      }
+    };
+  },
+  tasks(self) {
+    return {
+      'rename-locale': {
+        usage: 'Usage: node app @apostrophecms/i18n:rename-locale --old=de-DE --new=de-de --keep=de-de',
+        async task(argv) {
+          const oldLocale = self.apos.launder.string(argv.old);
+          const newLocale = self.apos.launder.string(argv.new);
+          const keep = self.apos.launder.string(argv.keep);
+          const {
+            renamed,
+            kept
+          } = await self.rename(oldLocale, newLocale, { keep });
+          console.log(`Renamed ${renamed} documents from ${oldLocale} to ${newLocale}`);
+          if (keep) {
+            console.log(`Due to conflicts, kept ${kept} documents from ${keep}`);
+          }
+        }
       }
     };
   }

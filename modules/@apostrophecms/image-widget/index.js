@@ -4,7 +4,10 @@ module.exports = {
     label: 'apostrophe:image',
     className: false,
     icon: 'image-icon',
-    dimensionAttrs: false
+    dimensionAttrs: false,
+    placeholder: true,
+    placeholderClass: false,
+    placeholderImage: 'jpg'
   },
   fields: {
     add: {
@@ -16,5 +19,8 @@ module.exports = {
         withType: '@apostrophecms/image'
       }
     }
+  },
+  init(self) {
+    self.determineBestAssetUrl('placeholder');
   }
 };

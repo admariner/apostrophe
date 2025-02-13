@@ -1,13 +1,16 @@
 <template>
   <AposModal
-    class="apos-doc-editor" :modal="modal"
+    class="apos-doc-editor"
+    :modal="modal"
     :modal-title="modalTitle"
-    @inactive="modal.active = false" @show-modal="modal.showModal = true"
-    @esc="confirmAndCancel" @no-modal="$emit('safe-close')"
+    @inactive="modal.active = false"
+    @show-modal="modal.showModal = true"
+    @esc="confirmAndCancel"
   >
     <template #secondaryControls>
       <AposButton
-        type="default" label="apostrophe:cancel"
+        type="default"
+        label="apostrophe:cancel"
         @click="confirmAndCancel"
       />
     </template>
@@ -17,14 +20,15 @@
         label="apostrophe:save"
         :disabled="!!errorCount"
         :tooltip="errorTooltip"
+        :attrs="{'data-apos-focus-priority': true}"
         @click="submit"
       />
     </template>
     <template #leftRail>
       <AposModalRail>
         <AposModalTabs
-          :key="tabKey"
           v-if="tabs.length"
+          :key="tabKey"
           :current="currentTab"
           :tabs="tabs"
           :errors="fieldErrors"
@@ -41,12 +45,12 @@
                 v-for="tab in tabs"
                 v-show="tab.name === currentTab"
                 :key="tab.name"
+                :ref="tab.name"
                 :schema="groups[tab.name].schema"
                 :current-fields="groups[tab.name].fields"
-                :value="docFields"
+                :model-value="docFields"
                 :trigger-validation="triggerValidation"
-                :ref="tab.name"
-                @input="updateDocFields"
+                @update:model-value="updateDocFields"
               />
             </div>
           </AposModalTabsBody>
@@ -57,11 +61,10 @@
 </template>
 
 <script>
-import { klona } from 'klona';
 import AposModifiedMixin from 'Modules/@apostrophecms/ui/mixins/AposModifiedMixin';
 import AposModalTabsMixin from 'Modules/@apostrophecms/modal/mixins/AposModalTabsMixin';
 import AposDocErrorsMixin from 'Modules/@apostrophecms/modal/mixins/AposDocErrorsMixin';
-
+import newInstance from 'apostrophe/modules/@apostrophecms/schema/lib/newInstance.js';
 import { detectDocChange } from 'Modules/@apostrophecms/schema/lib/detectChange';
 
 export default {
@@ -78,7 +81,7 @@ export default {
         return [];
       }
     },
-    value: {
+    modelValue: {
       type: Object,
       default() {
         return null;
@@ -89,19 +92,15 @@ export default {
       required: true
     }
   },
-  emits: [ 'modal-result', 'safe-close' ],
+  emits: [ 'modal-result' ],
   data() {
     return {
       docReady: false,
-      original: this.value,
+      original: this.modelValue,
       docFields: {
         data: {
-          ...((this.value != null) ? this.value
-            : Object.fromEntries(
-              this.schema.map(field =>
-                [ field.name, (field.def !== undefined) ? klona(field.def) : null ]
-              )
-            )
+          ...((this.modelValue != null) ? this.modelValue
+            : newInstance(this.schema)
           )
         },
         hasErrors: false

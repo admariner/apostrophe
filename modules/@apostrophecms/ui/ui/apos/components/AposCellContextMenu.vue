@@ -12,6 +12,7 @@
         :show-archive="options.showArchive"
         :show-restore="options.showRestore"
         :show-dismiss-submission="options.showDismissSubmission"
+        :can-delete-draft="options.canDeleteDraft"
         @menu-open="menuOpen = true"
         @menu-close="menuOpen = false"
       />
@@ -63,8 +64,12 @@ export default {
 <style lang="scss" scoped>
   .apos-table__cell-field--context-menu__content {
     @include apos-transition();
-    display: inline-block;
-    opacity: 0.3;
+
+    & {
+      display: inline-block;
+      opacity: 0.3;
+    }
+
     &.apos-is-visible {
       opacity: 1;
     }

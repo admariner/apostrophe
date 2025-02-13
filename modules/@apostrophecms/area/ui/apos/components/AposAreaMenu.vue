@@ -1,14 +1,13 @@
 <template>
   <AposButton
     v-if="options.expanded"
-    :disabled="disabled"
     v-bind="buttonOptions"
-    @click="openExpandedMenu(index)"
+    :disabled="isDisabled"
     role="button"
+    @click="openExpandedMenu(index)"
   />
   <AposAreaContextualMenu
     v-else
-    @add="$emit('add', $event);"
     :button-options="buttonOptions"
     :context-menu-options="contextMenuOptions"
     :empty="true"
@@ -16,7 +15,9 @@
     :widget-options="options.widgets"
     :options="options"
     :max-reached="maxReached"
-    :disabled="disabled"
+    :disabled="isDisabled"
+    :menu-id="menuId"
+    @add="$emit('add', $event);"
   />
 </template>
 
@@ -54,6 +55,14 @@ export default {
       default: function() {
         return {};
       }
+    },
+    tabbable: {
+      type: Boolean,
+      default: false
+    },
+    menuId: {
+      type: String,
+      default: null
     }
   },
   emits: [ 'add' ],
@@ -61,12 +70,19 @@ export default {
     buttonOptions() {
       return {
         label: 'apostrophe:addContent',
-        iconOnly: this.empty === false,
         icon: 'plus-icon',
         type: 'primary',
         modifiers: this.empty ? [] : [ 'round', 'tiny' ],
-        iconSize: this.empty ? 20 : 11
+        iconSize: this.empty ? 20 : 11,
+        disableFocus: !this.tabbable
       };
+    },
+    isDisabled() {
+      let flag = this.disabled;
+      if (this.maxReached) {
+        flag = true;
+      }
+      return flag;
     }
   },
   methods: {
@@ -87,11 +103,11 @@ export default {
 
 <style lang="scss" scoped>
 
-.apos-area-menu.apos-is-focused ::v-deep .apos-context-menu__inner {
+.apos-area-menu.apos-is-focused :deep(.apos-context-menu__inner) {
   border: 1px solid var(--a-base-4);
 }
 
-.apos-area-menu.apos-is-focused ::v-deep .apos-context-menu__tip-outline {
+.apos-area-menu.apos-is-focused :deep(.apos-context-menu__tip-outline) {
   stroke: var(--a-base-4);
 }
 
@@ -108,14 +124,17 @@ export default {
 .apos-area-menu__button {
   @include apos-button-reset();
   @include type-base;
-  box-sizing: border-box;
-  width: 100%;
-  padding: 5px 20px;
-  color: var(--a-base-1);
+
+  & {
+    box-sizing: border-box;
+    width: 100%;
+    padding: 5px 20px;
+    color: var(--a-base-1);
+  }
 
   &:hover,
   &:focus {
-    & ::v-deep .apos-area-menu__item-icon {
+    &:deep(.apos-area-menu__item-icon) {
       color: var(--a-primary);
     }
   }
@@ -143,11 +162,15 @@ export default {
 
 .apos-area-menu__group-label {
   @include apos-button-reset();
-  box-sizing: border-box;
-  display: flex;
-  width: 100%;
-  justify-content: space-between;
-  padding: 10px 20px;
+
+  & {
+    display: flex;
+    box-sizing: border-box;
+    justify-content: space-between;
+    width: 100%;
+    padding: 10px 20px;
+  }
+
   &:hover {
     cursor: pointer;
   }
@@ -160,7 +183,10 @@ export default {
 
 .apos-area-menu__group-chevron {
   @include apos-transition();
-  transform: rotate(90deg);
+
+  & {
+    transform: rotate(90deg);
+  }
 }
 
 .apos-area-menu__group-chevron.apos-is-active {
@@ -168,23 +194,27 @@ export default {
 }
 
 .apos-area-menu__group {
-  border-bottom: 1px solid var(--a-base-8);
-  padding-bottom: 10px;
   margin: 10px 0;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--a-base-8);
 }
+
 .apos-area-menu__item:last-child.apos-has-group .apos-area-menu__group {
-  border-bottom: none;
   margin-bottom: 0;
+  border-bottom: none;
 }
 
 .apos-area-menu__items--accordion {
-  overflow: hidden;
-  max-height: 0;
   @include apos-transition($duration:0.3s);
+
+  & {
+    overflow: hidden;
+    max-height: 0;
+  }
 }
 
 .apos-area-menu__items--accordion.apos-is-active {
-  transition-delay: 0.25s;
+  transition-delay: 250ms;
   max-height: 20rem;
 }
 

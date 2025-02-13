@@ -1,4 +1,5 @@
-const VueLoaderPlugin = require('vue-loader/lib/plugin');
+const webpack = require('webpack');
+const { VueLoaderPlugin } = require('vue-loader');
 
 module.exports = (options, apos) => {
   return {
@@ -15,7 +16,12 @@ module.exports = (options, apos) => {
     },
     plugins: [
       // make sure to include the plugin for the magic
-      new VueLoaderPlugin()
+      new VueLoaderPlugin(),
+      new webpack.DefinePlugin({
+        __VUE_OPTIONS_API__: 'true',
+        __VUE_PROD_DEVTOOLS__: 'false',
+        __VUE_PROD_HYDRATION_MISMATCH_DETAILS__: 'false'
+      })
     ]
   };
 };

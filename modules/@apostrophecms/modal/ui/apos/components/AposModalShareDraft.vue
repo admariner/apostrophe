@@ -4,7 +4,6 @@
     class="apos-share-draft"
     data-apos-test="share-draft-modal"
     v-on="{ esc: close }"
-    @no-modal="$emit('safe-close')"
     @inactive="modal.active = false"
     @show-modal="modal.showModal = true"
   >
@@ -17,6 +16,7 @@
             </h2>
             <Close
               class="apos-share-draft__close"
+              tabindex="0"
               :title="$t('apostrophe:close')"
               :size="18"
               @click.prevent="close"
@@ -27,9 +27,10 @@
               <AposToggle
                 v-model="disabled"
                 class="apos-share-draft__toggle"
+                data-apos-focus-priority
                 @toggle="toggle"
               />
-              <p class="apos-share-draft__toggle-label">
+              <p class="apos-share-draft__toggle-label" @click="toggle">
                 {{ $t('apostrophe:shareDraftEnable') }}
               </p>
             </div>
@@ -41,13 +42,14 @@
               :duration="200"
             >
               <div
-                class="apos-share-draft__url-block"
                 v-show="!disabled"
+                class="apos-share-draft__url-block"
               >
                 <input
                   v-model="shareUrl"
                   type="text"
                   disabled
+                  tabindex="-1"
                   class="apos-share-draft__url"
                 >
                 <a
@@ -72,8 +74,8 @@
 </template>
 
 <script>
-import Close from 'vue-material-design-icons/Close.vue';
-import LinkVariant from 'vue-material-design-icons/LinkVariant.vue';
+import Close from '@apostrophecms/vue-material-design-icons/Close.vue';
+import LinkVariant from '@apostrophecms/vue-material-design-icons/LinkVariant.vue';
 
 export default {
   components: {
@@ -86,15 +88,13 @@ export default {
       required: true
     }
   },
-  emits: [ 'safe-close' ],
   data() {
     return {
       modal: {
         active: false,
         type: 'overlay',
         showModal: false,
-        disableHeader: true,
-        trapFocus: true
+        disableHeader: true
       },
       shareUrl: '',
       disabled: true
@@ -203,58 +203,55 @@ export default {
 .apos-share-draft {
   z-index: $z-index-modal;
   position: fixed;
-  top: 0;
-  right: 0;
-  bottom: 0;
-  left: 0;
+  inset: 0;
   display: flex;
   align-items: center;
   justify-content: center;
-}
 
-::v-deep .apos-modal__inner {
-  top: auto;
-  right: auto;
-  bottom: auto;
-  left: auto;
-  max-width: 700px;
-  height: auto;
-  border-radius: 15px;
-}
-
-::v-deep .apos-modal__overlay {
-  .apos-modal + .apos-share-draft & {
-    display: block;
+  :deep(.apos-modal__inner) {
+    inset: auto;
+    max-width: 700px;
+    height: auto;
+    border-radius: 15px;
   }
-}
 
-::v-deep .apos-modal__body {
-  padding: 20px;
-}
+  :deep(.apos-modal__overlay) {
+    .apos-modal + .apos-share-draft & {
+      display: block;
+    }
+  }
 
-::v-deep .apos-modal__body-main {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
+  :deep(.apos-modal__body) {
+    padding: 20px;
+  }
+
+  :deep(.apos-modal__body-main) {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
 }
 
 .apos-share-draft__header {
   display: flex;
   justify-content: space-between;
   width: 100%;
-  border-bottom: 1px solid var(--a-base-8);
   padding: 0 20px 20px;
+  border-bottom: 1px solid var(--a-base-8);
 }
 
 .apos-share-draft__heading {
   @include type-title;
-  line-height: var(--a-line-tall);
-  margin: 0;
+
+  & {
+    line-height: var(--a-line-tall);
+    margin: 0;
+  }
 }
 
 .apos-share-draft__close {
-  height: 18px;
   align-self: center;
+  height: 18px;
   cursor: pointer;
 }
 
@@ -265,6 +262,7 @@ export default {
 .apos-share-draft__toggle-wrapper {
   display: flex;
   align-items: center;
+  margin-bottom: $spacing-base;
 }
 
 .apos-share-draft__toggle {
@@ -272,17 +270,28 @@ export default {
 }
 
 .apos-share-draft__toggle-label {
-  @include type-base;
-  max-width: 370px;
-  line-height: var(--a-line-tallest);
-  margin: 0;
+  @include type-large;
+
+  & {
+    flex-grow: 1;
+    max-width: 370px;
+    line-height: var(--a-line-tallest);
+    margin: 0;
+  }
+
+  &:hover {
+    cursor: pointer;
+  }
 }
 
 .apos-share-draft__description {
-  @include type-small;
-  line-height: var(--a-line-tall);
-  max-width: 355px;
-  color: var(--a-base-2);
+  @include type-base;
+
+  & {
+    line-height: var(--a-line-tall);
+    max-width: 355px;
+    color: var(--a-base-2);
+  }
 }
 
 .apos-share-draft__url-block {
@@ -298,12 +307,15 @@ export default {
 
 .apos-share-draft__url {
   @include type-base;
-  width: 100%;
-  padding: 5px;
-  border-radius: 5px;
-  background-color: var(--a-base-9);
-  border: 1px solid var(--a-base-8);
-  box-sizing: border-box;
+
+  & {
+    box-sizing: border-box;
+    width: 100%;
+    padding: 5px;
+    border: 1px solid var(--a-base-8);
+    border-radius: 5px;
+    background-color: var(--a-base-9);
+  }
 }
 
 .apos-share-draft__link-icon {
@@ -312,12 +324,15 @@ export default {
 
 .apos-share-draft__link-copy {
   @include type-base;
-  display: flex;
-  justify-content: flex-end;
-  align-items: center;
-  margin-top: $spacing-double;
-  text-decoration: none;
-  color: var(--a-primary);
-  font-weight: var(--a-weight-bold);;
+
+  & {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    margin-top: $spacing-double;
+    color: var(--a-primary);
+    text-decoration: none;
+    font-weight: var(--a-weight-bold);
+  }
 }
 </style>

@@ -3,18 +3,23 @@
     <AposButton
       :disabled="currentPage == 1"
       class="apos-pager__btn"
-      type="outline" @click="incrementPage(-1)"
-      :icon-only="true" icon="chevron-left-icon"
+      type="outline"
+      icon="chevron-left-icon"
+      :modifiers="['small']"
+      :icon-only="true"
       :label="prevButtonLabel"
+      @click="incrementPage(-1)"
     />
     <div class="apos-input-wrapper">
       <select
+        v-model="selectedPage"
+        class="apos-pager__page-select apos-input apos-input--select"
         :disabled="totalPages <= 1"
-        class="apos-input apos-input--select"
-        v-model="selectedPage" :aria-label="$t('apostrophe:selectPage')"
+        :aria-label="$t('apostrophe:selectPage')"
       >
         <option
-          v-for="num in totalPages" :key="num"
+          v-for="num in totalPages"
+          :key="num"
           :value="num"
         >
           {{ $t('apostrophe:pageNumber', { number: num }) }}
@@ -24,16 +29,19 @@
     </div>
     <AposButton
       :disabled="currentPage >= totalPages"
+      type="outline"
       class="apos-pager__btn"
-      type="outline" @click="incrementPage(1)"
-      :icon-only="true" icon="chevron-right-icon"
+      icon="chevron-right-icon"
+      :modifiers="['small']"
+      :icon-only="true"
       :label="nextButtonLabel"
+      @click="incrementPage(1)"
     />
   </nav>
 </template>
 
 <script>
-import MenuSwap from 'vue-material-design-icons/MenuSwap.vue';
+import MenuSwap from '@apostrophecms/vue-material-design-icons/MenuSwap.vue';
 
 export default {
   name: 'AposPager',
@@ -90,17 +98,16 @@ export default {
 <style lang="scss" scoped>
   .apos-pager {
     @include type-base;
-    display: inline-flex;
-    align-items: center;
-  }
 
-  .apos-input-wrapper {
-    display: inline-flex;
-    align-self: stretch;
+    & {
+      display: inline-flex;
+      align-items: center;
+    }
   }
 
   .apos-input--select {
     background-color: transparent;
+    height: 32px;
     padding: 0 $spacing-double 0 $spacing-base;
   }
 

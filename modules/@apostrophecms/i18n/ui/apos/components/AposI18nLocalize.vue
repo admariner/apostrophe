@@ -6,7 +6,6 @@
     @esc="close"
     @inactive="modal.active = false"
     @show-modal="modal.showModal = true"
-    @no-modal="$emit('safe-close')"
   >
     <template #leftRail>
       <AposModalBody class="apos-wizard__navigation">
@@ -27,8 +26,8 @@
             <AposButton
               type="default"
               label="apostrophe:cancel"
-              @click="close"
               :modifiers="[ 'block' ]"
+              @click="close"
             />
           </div>
         </template>
@@ -49,12 +48,12 @@
               class="apos-wizard__step apos-wizard__step-select-content"
             >
               <AposInputRadio
+                v-model="wizard.values.toLocalize"
                 :field="{
-                  name: 'toLocalize',
+                  name: 'to-localize',
                   label: 'apostrophe:selectContentToLocalize',
                   choices: toLocalizeChoices
                 }"
-                v-model="wizard.values.toLocalize"
               />
               <p class="apos-wizard__help-text">
                 <AposIndicator
@@ -71,20 +70,20 @@
               class="apos-wizard__step apos-wizard__step-select-locales"
             >
               <AposButton
-                v-on="{ click: allSelected ? deselectAll : selectAll }"
                 class="apos-locale-select-all"
                 :label="allSelected
                   ? $t('apostrophe:deselectAll')
                   : $t('apostrophe:selectAll')"
                 type="quiet"
                 :modifiers="[ 'inline' ]"
+                v-on="{ click: allSelected ? deselectAll : selectAll }"
               />
               <AposInputString
+                ref="searchInput"
                 v-model="searchValue"
                 :field="searchField"
-                @input="updateFilter"
                 class="apos-locales-filter"
-                ref="searchInput"
+                @update:model-value="updateFilter"
               />
               <transition-group
                 tag="ul"
@@ -98,12 +97,12 @@
                 >
                   <AposButton
                     type="primary"
-                    @click.prevent="removeLocale(loc)"
                     class="apos-locale-button"
                     :modifiers="[ 'small' ]"
                     icon="close-icon"
                     :icon-size="12"
                     :label="loc.label"
+                    @click.prevent="removeLocale(loc)"
                   />
                 </li>
               </transition-group>
@@ -112,6 +111,7 @@
                   v-for="loc in filteredLocales"
                   :key="loc.name"
                   class="apos-locale-item"
+                  data-apos-test="localeItem"
                   :class="localeClasses(loc)"
                   @click="toggleLocale(loc)"
                 >
@@ -121,28 +121,28 @@
                       icon="map-marker-icon"
                       class="apos-current-locale-icon"
                       :icon-size="14"
-                      title="Default locale"
-                      tooltip="Current Locale"
+                      :title="$t('apostrophe:i18nDefaultLocale')"
+                      tooltip="apostrophe:i18nCurrentLocale"
                     />
                     <AposIndicator
                       v-if="isSelected(loc)"
                       icon="check-bold-icon"
                       class="apos-check-icon"
                       :icon-size="10"
-                      title="Currently selected locale"
+                      :title="$t('apostrophe:i18nCurrentlySelectedLocale')"
                     />
                     {{ loc.label }}
                     <span class="apos-locale-name">
                       ({{ loc.name }})
                     </span>
                     <span
+                      v-apos-tooltip="isLocalized(loc)
+                        ? 'apostrophe:localizeLocalized'
+                        : 'apostrophe:localizeNotYetLocalized'"
                       class="apos-locale-localized"
                       :class="{
                         'apos-state-is-localized': isLocalized(loc),
                       }"
-                      v-apos-tooltip="isLocalized(loc)
-                        ? 'Localized'
-                        : 'Not Yet Localized'"
                     />
                   </span>
                 </li>
@@ -155,9 +155,9 @@
             >
               <ul class="apos-selected-locales">
                 <li
-                  class="apos-locale-item--selected"
                   v-for="loc in selectedLocales"
                   :key="loc.name"
+                  class="apos-locale-item--selected"
                 >
                   <AposButton
                     type="primary"
@@ -184,6 +184,7 @@
                 </p>
 
                 <AposInputRadio
+                  v-model="wizard.values.relatedDocSettings"
                   :field="{
                     name: 'relatedDocSettings',
                     choices: [
@@ -198,13 +199,11 @@
                       },
                     ],
                   }"
-                  v-model="wizard.values.relatedDocSettings"
                 />
-
                 <AposInputCheckboxes
                   v-if="relatedDocTypes.length"
-                  :field="relatedDocTypesField"
                   v-model="wizard.values.relatedDocTypesToLocalize"
+                  :field="relatedDocTypesField"
                 />
                 <p v-else class="apos-wizard__help-text">
                   <AposIndicator
@@ -216,32 +215,75 @@
                   {{ $t('apostrophe:noNewRelatedDocuments') }}
                 </p>
               </div>
+              <div v-if="translationEnabled" class="apos-wizard__translation">
+                <p class="apos-wizard__translation-title">
+                  <AposTranslationIndicator :size="18" />
+                  <span class="apos-wizard__translation-title-text">
+                    {{ $t('apostrophe:automaticTranslationSettings') }}
+                  </span>
+                </p>
+                <AposCheckbox
+                  v-model="wizard.values.translateContent.data"
+                  :field="{ name: 'translate' }"
+                  :choice="{
+                    value: wizard.values.translateContent.data,
+                    label: $t('apostrophe:automaticTranslationCheckbox')
+                  }"
+                  data-apos-test="localizationTranslationCheck"
+                />
+
+                <div v-if="translationErrMsg">
+                  <!-- eslint-disable vue/no-v-html -->
+                  <p
+                    class="apos-wizard__translation-error"
+                    data-apos-test="localizationTranslationErr"
+                    v-html="translationErrMsg"
+                  />
+                  <!-- eslint-disable vue/no-v-html -->
+                  <AposButton
+                    v-if="translationShowRetry"
+                    label="apostrophe:retry"
+                    :modifiers="['quiet', 'no-motion']"
+                    data-apos-test="localizationTranslationRetry"
+                    @click="retryTranslationCheck()"
+                  />
+                </div>
+                <div
+                  v-else-if="translationShowLoader"
+                  class="apos-wizard__translation-spinner"
+                >
+                  <AposSpinner />
+                </div>
+              </div>
             </fieldset>
           </form>
         </template>
         <template #footer>
           <AposButton
             v-if="isLastStep()"
+            :attrs="{'data-apos-focus-priority': true}"
             type="primary"
             label="apostrophe:localizeContent"
-            :disabled="!complete()"
+            :disabled="!complete() || wizard.busy"
             @click="submit"
           />
           <AposButton
             v-else
+            :attrs="{'data-apos-focus-priority': true}"
             type="primary"
-            @click="goToNext()"
             icon="arrow-right-icon"
             :modifiers="['icon-right']"
-            :disabled="!complete()"
+            :disabled="!complete() || wizard.busy"
             :icon-size="12"
             label="apostrophe:next"
+            @click="goToNext()"
           />
           <AposButton
             v-if="!isFirstStep()"
             type="default"
-            @click="goToPrevious()"
+            :disabled="wizard.busy"
             label="apostrophe:back"
+            @click="goToPrevious()"
           />
         </template>
       </AposModalBody>
@@ -254,16 +296,21 @@ export default {
   name: 'AposI18nLocalize',
   props: {
     doc: {
-      required: true,
-      type: Object
+      required: false,
+      type: Object,
+      default: null
     },
     locale: {
       required: false,
       type: Object,
       default: null
+    },
+    moduleName: {
+      required: true,
+      type: String
     }
   },
-  emits: [ 'safe-close', 'modal-result' ],
+  emits: [ 'modal-result' ],
   data() {
     return {
       modal: {
@@ -277,7 +324,8 @@ export default {
         ([ locale, options ]) => {
           return {
             name: locale,
-            label: options.label || locale
+            label: options.label || locale,
+            _edit: options._edit
           };
         }
       ),
@@ -288,6 +336,7 @@ export default {
       },
       wizard: {
         step: 'selectContent',
+        busy: false,
         sections: {
           selectContent: {
             title: this.$t('apostrophe:selectContent'),
@@ -336,7 +385,10 @@ export default {
           toLocalize: { data: 'thisDocAndRelated' },
           toLocales: { data: this.locale ? [ this.locale ] : [] },
           relatedDocSettings: { data: 'localizeNewRelated' },
-          relatedDocTypesToLocalize: { data: [] }
+          relatedDocTypesToLocalize: { data: [] },
+          translateContent: { data: false },
+          translateTargets: { data: [] },
+          translateProvider: { data: apos.translation.providers[0]?.name || null }
         }
       },
       fullDoc: this.doc,
@@ -354,7 +406,9 @@ export default {
         value: '',
         error: false
       },
-      toLocalizeChoices: [
+      // Configured based on the mode we are in (batch vs standalone)
+      toLocalizeChoices: [],
+      toLocalizeChoicesStandalone: [
         {
           value: 'thisDoc',
           label: 'apostrophe:thisDocument'
@@ -367,12 +421,57 @@ export default {
           value: 'relatedDocsOnly',
           label: 'apostrophe:relatedDocsOnly'
         }
-      ]
+      ],
+      toLocalizeChoicesBatch: [
+        {
+          value: 'thisDoc',
+          label: 'apostrophe:theseDocuments'
+        },
+        {
+          value: 'thisDocAndRelated',
+          label: 'apostrophe:theseDocumentsAndRelated'
+        },
+        {
+          value: 'relatedDocsOnly',
+          label: 'apostrophe:relatedDocsOnly'
+        }
+      ],
+      translationEnabled: apos.modules['@apostrophecms/translation'].enabled,
+      translationErrMsg: null,
+      translationShowRetry: false,
+      translationShowLoader: false
     };
   },
   computed: {
     moduleOptions() {
       return window.apos.i18n;
+    },
+    batchOptions() {
+      if (this.$attrs.action === 'localize') {
+        return {
+          enabled: true,
+          action: this.$attrs.action,
+          label: this.$attrs.label,
+          messages: this.$attrs.messages,
+          checked: this.$attrs.checked,
+          checkedTypes: this.$attrs.checkedTypes || [ this.moduleName ],
+          permission: this.$attrs.permission
+        };
+      }
+
+      return {
+        enabled: false
+      };
+    },
+    isBatchMode() {
+      return this.batchOptions.enabled;
+    },
+    currentLocale() {
+      // We need to grab the locale from the modal data, because it can change
+      // while in modal (switch locale in editor modal).
+      // Exposing `modalData` property breaks the internally used AposModal
+      // component for some unknown reason, so we need to use the attrs.
+      return this.$attrs['modal-data']?.locale ?? this.moduleOptions.locale;
     },
     action() {
       return this.doc.slug.startsWith('/')
@@ -380,12 +479,12 @@ export default {
         : apos.modules[this.doc.type].action;
     },
     filteredLocales() {
-      return this.locales.filter(({ name, label }) => {
-        const matches = term =>
-          term
-            .toLowerCase()
-            .includes(this.wizard.sections.selectLocales.filter.toLowerCase());
+      const matches = term =>
+        term
+          .toLowerCase()
+          .includes(this.wizard.sections.selectLocales.filter.toLowerCase());
 
+      return this.locales.filter(({ name, label }) => {
         return matches(name) || matches(label);
       });
     },
@@ -393,9 +492,13 @@ export default {
       return this.wizard.values.toLocales.data;
     },
     allSelected() {
-      return this.selectedLocales.length === this.locales.filter(locale => !this.isCurrentLocale(locale)).length;
+      return this.selectedLocales.length === this.locales.filter(locale => !this.isCurrentLocale(locale) && this.canEditLocale(locale)).length;
     },
     relatedDocTypes() {
+      if (this.isBatchMode) {
+        return this.getRelatedSchemaTypes(this.batchOptions.checkedTypes);
+      }
+
       const types = {};
       for (const doc of this.relatedDocs) {
         if (!types[doc.type]) {
@@ -419,21 +522,22 @@ export default {
     },
     relatedDocTypesField() {
       return {
-        name: 'relatedDocTypesToLocalize',
+        name: 'related-doc-types-to-localize',
         label: 'apostrophe:relatedDocTypesToLocalize',
         choices: this.relatedDocTypes
       };
     },
     visibleSections() {
       const self = this;
-      const result = Object.entries(this.wizard.sections).filter(([ name, section ]) => {
-        return section.if ? section.if.bind(self)() : true;
-      }).map(([ name, section ]) => {
-        return {
-          name,
-          ...section
-        };
-      });
+      const result = Object.entries(this.wizard.sections)
+        .filter(([ , section ]) => {
+          return section.if ? section.if.bind(self)() : true;
+        }).map(([ name, section ]) => {
+          return {
+            name,
+            ...section
+          };
+        });
       return result;
     },
     visibleStepNames() {
@@ -451,14 +555,28 @@ export default {
     }
   },
   watch: {
+    // Debug busy state - controlling disabled state for actions.
+    // 'wizard.busy'(newVal) {
+    //   console.log('BUSY STATUS', newVal);
+    // },
     'wizard.values.relatedDocSettings.data'() {
-      this.updateRelatedDocs();
+      if (!this.isBatchMode) {
+        this.updateRelatedDocs();
+      }
     },
     'wizard.values.toLocalize.data'() {
-      this.updateRelatedDocs();
+      if (!this.isBatchMode) {
+        this.updateRelatedDocs();
+      }
+    },
+    async 'wizard.values.translateContent.data'(value) {
+      // TODO - fix this as it depends on doc data.
+      await this.checkAvailableTranslations(value);
     },
     selectedLocales() {
-      this.updateRelatedDocs();
+      if (!this.isBatchMode) {
+        this.updateRelatedDocs();
+      }
     },
     relatedDocs() {
       for (const doc of this.relatedDocs) {
@@ -469,32 +587,61 @@ export default {
           }
         }
       }
+    },
+    relatedDocTypes(newVal) {
+      if (!this.isBatchMode) {
+        return;
+      }
+      for (const item of newVal) {
+        if (!this.docTypesSeen.includes(item.value)) {
+          this.docTypesSeen.push(item.value);
+          this.wizard.values.relatedDocTypesToLocalize.data.push(item.value);
+        }
+      }
     }
   },
   async mounted() {
     this.modal.active = true;
-    this.fullDoc = await apos.http.get(
-      `${this.action}/${this.doc._id}`,
-      {
-        busy: true
-      }
-    );
+    this.wizard.busy = true;
+    this.normalizeConfig();
+    if (this.isBatchMode) {
+      this.wizard.step = this.visibleStepNames[0];
+      this.wizard.busy = false;
+    } else {
+      try {
+        this.fullDoc = await apos.http.get(
+          `${this.action}/${this.doc._id}`,
+          {
+            busy: true
+          }
+        );
 
-    const docs = await apos.http.get(
-      `${this.action}/${this.fullDoc._id}/locales`,
-      {
-        busy: true
+        const docs = await apos.http.get(
+          `${this.action}/${this.fullDoc._id}/locales`,
+          {
+            busy: true
+          }
+        );
+        this.localized = Object.fromEntries(
+          docs.results
+            .filter(doc => doc.aposLocale.endsWith(':draft'))
+            .map(doc => [ doc.aposLocale.split(':')[0], doc ])
+        );
+        await this.updateRelatedDocs();
+      } finally {
+        this.wizard.step = this.visibleStepNames[0];
+        this.wizard.busy = false;
       }
-    );
-    this.localized = Object.fromEntries(
-      docs.results
-        .filter(doc => doc.aposLocale.endsWith(':draft'))
-        .map(doc => [ doc.aposLocale.split(':')[0], doc ])
-    );
-    await this.updateRelatedDocs();
-    this.wizard.step = this.visibleStepNames[0];
+    }
   },
   methods: {
+    normalizeConfig() {
+      if (this.isBatchMode) {
+        this.toLocalizeChoices = this.toLocalizeChoicesBatch;
+      } else {
+        this.toLocalizeChoices = this.toLocalizeChoicesStandalone;
+      }
+    },
     close() {
       if (!this.modal.busy) {
         this.modal.showModal = false;
@@ -505,6 +652,13 @@ export default {
     },
     goToPrevious() {
       this.wizard.step = this.previousStepName;
+      this.uncheckTranslate();
+    },
+    uncheckTranslate() {
+      this.wizard.values.translateContent.data = false;
+      this.wizard.values.translateTargets.data = [];
+      this.translationErrMsg = null;
+      this.translationShowRetry = false;
     },
     goToNext() {
       this.goTo(this.nextStepName);
@@ -519,7 +673,10 @@ export default {
       return this.wizard.step === name;
     },
     isCurrentLocale(locale) {
-      return window.apos.i18n.locale === locale.name;
+      return this.currentLocale === locale.name;
+    },
+    canEditLocale(locale) {
+      return !!locale._edit;
     },
     isSelected(locale) {
       return this.wizard.values.toLocales.data.some(
@@ -530,16 +687,26 @@ export default {
       return !!this.localized[locale.name];
     },
     selectAll() {
-      this.wizard.values.toLocales.data = this.locales.filter(locale => !this.isCurrentLocale(locale));
+      this.wizard.values.toLocales.data = this.locales
+        .filter(locale => !this.isCurrentLocale(locale) && this.canEditLocale(locale));
     },
     deselectAll() {
       this.wizard.values.toLocales.data = [];
     },
     toggleLocale(locale) {
-      if (!this.isSelected(locale) && !this.isCurrentLocale(locale)) {
-        this.wizard.values.toLocales.data.push(locale);
+      if (
+        !this.isSelected(locale) &&
+        !this.isCurrentLocale(locale) &&
+          this.canEditLocale(locale)
+      ) {
+        this.wizard.values.toLocales.data = [
+          ...this.wizard.values.toLocales.data,
+          locale
+        ];
+
       } else if (this.isSelected(locale)) {
-        this.wizard.values.toLocales.data = this.wizard.values.toLocales.data.filter(l => l !== locale);
+        this.wizard.values.toLocales.data = this.wizard.values.toLocales.data
+          .filter(l => l !== locale);
       }
       // Reset search filter
       if (this.filteredLocales.length < 2) {
@@ -579,6 +746,9 @@ export default {
       if (this.isCurrentLocale(locale)) {
         classes['apos-current-locale'] = true;
       }
+      if (!this.canEditLocale(locale)) {
+        classes['apos-disabled-locale'] = true;
+      }
       return classes;
     },
     // Singular type name for label (returns an i18next key)
@@ -603,8 +773,12 @@ export default {
       }
     },
     async submit() {
+      if (this.isBatchMode) {
+        return this.submitBatch();
+      }
       let docs = [];
       const notifications = [];
+      this.wizard.busy = true;
 
       if (this.wizard.values.toLocalize.data !== 'relatedDocsOnly') {
         docs.push(this.fullDoc);
@@ -633,19 +807,25 @@ export default {
                 toLocale: locale.name,
                 update: (doc._id === this.fullDoc._id) || !(this.wizard.values.relatedDocSettings.data === 'localizeNewRelated')
               },
+              qs: {
+                aposTranslateTargets: this.wizard.values.translateTargets.data,
+                aposTranslateProvider: this.wizard.values.translateProvider.data
+              },
               busy: true
             });
 
             notifications.push({
               type: 'success',
               locale,
-              doc
+              docTypeLabel: this.singular(doc.type),
+              doc,
+              relationship: doc._id === this.fullDoc._id
             });
 
             if (this.locale) {
               // Ask for the redirect URL, this way it still works if we
               // need to carry a session across hostnames
-              const result = await apos.http.post(`${apos.i18n.action}/locale`, {
+              const result = await apos.http.post(`${this.moduleOptions.action}/locale`, {
                 body: {
                   contextDocId: apos.adminBar.context && apos.adminBar.context._id,
                   locale: locale.name
@@ -660,12 +840,16 @@ export default {
             // Status code 409 (conflict) means an existing document
             // we opted not to overwrite
             if (e.status !== 409) {
+              const detail = e?.body?.data?.parentNotLocalized
+                ? this.$t('apostrophe:parentNotLocalized')
+                : e?.body?.data?.detail ? this.$t(e.body.data.detail) : null;
               notifications.push({
                 type: 'error',
                 locale,
+                docTypeLabel: this.singular(doc.type),
                 doc,
-                detail: e?.body?.data?.parentNotLocalized &&
-                  'apostrophe:parentNotLocalized'
+                relationship: doc._id === this.fullDoc._id,
+                detail
               });
             }
           }
@@ -676,21 +860,49 @@ export default {
         this.modal.busy = false;
         this.close();
 
-        await apos.alert(
+        await apos.report(
           {
-            icon: false,
-            heading: 'apostrophe:localizingBusy',
-            description: 'apostrophe:thereWasAnIssueLocalizing',
-            body: {
-              component: 'AposI18nLocalizeErrors',
-              props: {
-                notifications
+            heading: 'apostrophe:localizingReportHeading',
+            description: 'apostrophe:localizingReportDesc',
+            footerMessageDanger: 'apostrophe:localizingReportHeading',
+            items: notifications,
+            headers: [
+              {
+                name: 'doc.aposDocId',
+                label: '_id',
+                format: 'last:5'
+              },
+              {
+                name: 'docTypeLabel',
+                label: 'apostrophe:type',
+                sortable: true
+              },
+              {
+                name: 'locale.label',
+                label: 'apostrophe:locale',
+                sortable: true
+              },
+              {
+                name: 'relationship',
+                label: 'apostrophe:relationship',
+                format: 'yesno',
+                visibility: 'export',
+                sortable: true
+              },
+              {
+                name: 'doc.title',
+                label: 'apostrophe:title',
+                width: '20%',
+                sortable: true
+              },
+              {
+                name: 'detail',
+                label: 'apostrophe:details',
+                width: '20%'
               }
-            },
-            affirmativeLabel: 'apostrophe:close'
+            ]
           }
         );
-
       } else {
         for (const item of notifications) {
           await apos.notify('apostrophe:localized', {
@@ -711,20 +923,127 @@ export default {
         this.close();
       }, 250);
     },
+    async submitBatch() {
+      const relatedTypes = this.wizard.values.toLocalize.data === 'thisDoc'
+        ? []
+        : this.wizard.values.relatedDocTypesToLocalize.data;
+      const route = apos.modules[this.moduleName].action;
+
+      try {
+        await apos.http.post(`${route}/${this.batchOptions.action}`, {
+          busy: true,
+          qs: {
+            aposTranslateTargets: this.wizard.values.translateTargets.data,
+            aposTranslateProvider: this.wizard.values.translateProvider.data
+          },
+          body: {
+            _ids: this.batchOptions.checked,
+            relatedTypes,
+            toLocales: this.selectedLocales.map(locale => locale.name),
+            update: this.wizard.values.relatedDocSettings.data !== 'localizeNewRelated',
+            relatedOnly: this.wizard.values.toLocalize.data === 'relatedDocsOnly',
+            messages: this.batchOptions.messages
+          }
+        });
+      } catch (error) {
+        apos.notify('apostrophe:error', {
+          type: 'danger',
+          dismiss: true
+        });
+      } finally {
+        this.modal.busy = false;
+        this.close();
+      }
+    },
+    getRelatedSchemaTypes(types) {
+      const self = this;
+      const allTypes = {};
+      const seen = new Set();
+      types.forEach(type =>
+        getRelatedTypesBySchema(
+          apos.modules[type].schema,
+          allTypes,
+          seen
+        )
+      );
+
+      return Object.values(allTypes)
+        .filter(type => canLocalize(type.value));
+
+      function getRelatedTypesBySchema(schema, result = {}, seen = new Set()) {
+        for (const field of schema || []) {
+          if (seen.has(field._id)) {
+            continue;
+          }
+          seen.add(field._id);
+
+          switch (field.type) {
+            case 'array':
+            case 'object':
+              getRelatedTypesBySchema(field.schema, result, seen);
+              break;
+
+            case 'area': {
+              for (const widget of Object.keys(field.options?.widgets || {})) {
+                getRelatedTypesBySchema(apos.modules[`${widget}-widget`]?.schema, result, seen);
+              }
+              break;
+            }
+
+            case 'relationship': {
+              result[field.withType] ||= {
+                value: field.withType,
+                count: 0
+              };
+              if (!result[field.withType].count) {
+                result[field.withType].label = self.plural(field.withType);
+              }
+              result[field.withType].count++;
+              break;
+            }
+
+            default:
+              break;
+          }
+        }
+      };
+
+      function canLocalize(type) {
+        // Explicitly opt out of localization for pages as related docs.
+        // This is needed only in batch mode, because we don't have the
+        // full doc to check for `relatedDocument` property.
+        // Without this, the "Pages" type would be shown in the UI, but filtered out
+        // on the backend. The downside: if a page type explicitly opts in
+        // for localization (`options.relatedDocument = true`),
+        // it won't be respected in batch mode. Removing the below condition
+        // is an option in the future.
+        if ([ '@apostrophecms/page', '@apostrophecms/any-page-type' ].includes(type)) {
+          return false;
+        }
+        return window.apos.modules[type].relatedDocument !== false &&
+            window.apos.modules[type].localized !== false;
+      }
+    },
     // Get all related documents
     async getRelatedDocs(doc) {
+      const status = this.wizard.busy;
+      this.wizard.busy = true;
       const schema = apos.modules[doc.type].schema;
       const docs = getRelatedBySchema(doc, schema);
       if (!docs.length) {
         return [];
       }
-      const result = await apos.http.post(`${apos.doc.action}/editable?aposMode=draft`, {
-        body: {
-          ids: docs.map(doc => doc._id)
-        }
-      });
-      const filtered = docs.filter(doc => result.editable.includes(doc._id));
-      return filtered;
+      try {
+        const result = await apos.http.post(`${apos.doc.action}/editable?aposMode=draft`, {
+          body: {
+            ids: docs.map(doc => doc._id)
+          }
+        });
+        const filtered = docs.filter(doc => result.editable.includes(doc._id));
+        return filtered;
+      } finally {
+        this.wizard.busy = status;
+      }
 
       function getRelatedBySchema(object, schema) {
         let related = [];
@@ -763,13 +1082,19 @@ export default {
         // never be considered "related" to other pages simply because
         // of navigation links, the feature is meant for pieces that feel more like
         // part of the document being localized)
-        return related.filter(doc => apos.modules[doc.type].relatedDocument !== false);
+        // We also remove non localized content like users
+        return related.filter(doc => {
+          return apos.modules[doc.type].relatedDocument !== false &&
+            apos.modules[doc.type].localized !== false;
+        });
       }
     },
     async updateRelatedDocs() {
       if (this.wizard.values.toLocalize.data === 'thisDoc') {
         return;
       }
+      const status = this.wizard.busy;
+      this.wizard.busy = true;
       let relatedDocs = await this.getRelatedDocs(this.fullDoc);
       this.allRelatedDocs = relatedDocs;
       this.allRelatedDocsKnown = true;
@@ -794,6 +1119,78 @@ export default {
         relatedDocs = relatedDocs.filter(doc => unlocalizedIds.has(doc._id));
       }
       this.relatedDocs = relatedDocs;
+      this.wizard.busy = status;
+    },
+    wait(time) {
+      return new Promise((resolve) => {
+        setTimeout(() => {
+          resolve();
+        }, time);
+      });
+    },
+    async retryTranslationCheck() {
+      await this.checkAvailableTranslations(false);
+      this.translationShowLoader = true;
+      await this.wait(500);
+      await this.checkAvailableTranslations(true);
+      this.translationShowLoader = false;
+    },
+    async checkAvailableTranslations(value) {
+      if (!value) {
+        this.translationErrMsg = null;
+        this.translationShowRetry = false;
+        this.wizard.values.translateTargets.data = [];
+        return;
+      }
+      const sourceLocale = this.currentLocale;
+      const targets = this.wizard.values.toLocales.data;
+
+      let response;
+      try {
+        response = await apos.http.get(`${apos.translation.action}/languages`, {
+          qs: {
+            provider: this.wizard.values.translateProvider.data,
+            source: [ sourceLocale ],
+            target: targets.map(({ name }) => name)
+          }
+        });
+      } catch (err) {
+        console.error('An error happened while getting available languages: ', err);
+        this.wizard.values.translateTargets.data = [];
+        this.translationErrMsg = this.$t('apostrophe:automaticTranslationErrMsg');
+        this.translationShowRetry = true;
+        return;
+      }
+
+      const unavailableSource = !response.source[0].supported;
+      const unavailableTargetsLabels = response.target
+        .filter(({ supported }) => !supported)
+        .map(({ code }) => targets.find((locale) => locale.name === code)?.label || code);
+
+      if (unavailableSource) {
+        const sourceLabel = this.moduleOptions.locales[sourceLocale]?.label;
+        this.translationErrMsg = this.$t('apostrophe:automaticTranslationSourceErrMsg', { source: sourceLabel });
+        this.wizard.values.translateTargets.data = [];
+        return;
+      }
+
+      if (unavailableTargetsLabels.length) {
+        const isPlural = unavailableTargetsLabels.length > 1;
+        this.translationErrMsg = this.$t(
+          `apostrophe:automaticTranslationTargetErrMsg${isPlural ? '_plural' : ''}`,
+          { targets: unavailableTargetsLabels.join(', ') }
+        );
+      }
+
+      if (unavailableTargetsLabels.length >= targets.length) {
+        this.wizard.values.translateTargets.data = [];
+        return;
+      }
+
+      this.wizard.values.translateTargets.data = response.target
+        .filter(({ supported }) => supported)
+        .map(({ code }) => code);
+
     }
   }
 };
@@ -803,32 +1200,30 @@ export default {
 .apos-i18n-localize {
   @include type-base;
 
-  ::v-deep .apos-modal__inner {
+  :deep(.apos-modal__inner) {
     $width: 565px;
     $vertical-spacing: 95px;
     $horizontal-spacing: calc(calc(100vw - #{$width}) / 2);
-    top: $vertical-spacing;
-    right: $horizontal-spacing;
-    bottom: $vertical-spacing;
-    left: $horizontal-spacing;
+
+    inset: $vertical-spacing $horizontal-spacing $vertical-spacing $horizontal-spacing;
     width: $width;
     height: calc(100vh - #{$vertical-spacing * 2});
   }
 
-  ::v-deep .apos-modal__main--with-left-rail {
+  :deep(.apos-modal__main--with-left-rail) {
     grid-template-columns: 30% 70%;
   }
 
-  ::v-deep .apos-modal__body-inner {
+  :deep(.apos-modal__body-inner) {
     padding: $spacing-triple $spacing-triple $spacing-double;
   }
 
-  ::v-deep .apos-wizard__content .apos-modal__body-footer {
+  :deep(.apos-wizard__content .apos-modal__body-footer) {
     flex-direction: row-reverse;
     border-top: 1px solid var(--a-base-9);
   }
 
-  ::v-deep .apos-busy__spinner {
+  :deep(.apos-busy__spinner) {
     display: inline-block;
   }
 }
@@ -840,11 +1235,19 @@ export default {
 
 .apos-wizard__navigation__items {
   @include apos-list-reset();
-  padding: $spacing-base;
+
+  & {
+    padding: $spacing-base;
+  }
 }
+
 .apos-wizard__navigation__item {
   @include type-small;
-  margin-bottom: $spacing-base + $spacing-half;
+
+  & {
+    margin-bottom: $spacing-base + $spacing-half;
+  }
+
   &.apos-is-active {
     color: var(--a-primary);
   }
@@ -852,7 +1255,10 @@ export default {
 
 .apos-modal__heading {
   @include type-title;
-  margin: 0 0 $spacing-double 0;
+
+  & {
+    margin: 0 0 $spacing-double;
+  }
 }
 
 .apos-wizard__step {
@@ -862,7 +1268,7 @@ export default {
   border: none;
 }
 
-::v-deep .apos-field--toLocalize {
+:deep(.apos-field--to-localize) {
   margin-bottom: $spacing-triple;
 }
 
@@ -873,7 +1279,7 @@ export default {
   font-weight: 400;
   color: var(--a-base-3);
 
-  ::v-deep .material-design-icon {
+  :deep(.material-design-icon) {
     position: relative;
     top: 3px;
     color: var(--a-base-5);
@@ -892,10 +1298,10 @@ export default {
 
 .apos-selected-locales,
 .apos-locales {
-  list-style-type: none;
-  padding-left: 0;
   margin-top: 0;
   margin-bottom: 0;
+  padding-left: 0;
+  list-style-type: none;
 }
 
 .apos-selected-locales {
@@ -911,31 +1317,38 @@ export default {
 .apos-locale-item--selected {
   display: inline-block;
   margin-bottom: 5px;
+
   &:not(:last-of-type) {
     margin-right: 5px;
   }
 }
 
-.apos-locale-button ::v-deep .apos-button {
+.apos-locale-button :deep(.apos-button) {
   font-size: var(--a-type-small);
 }
 
 .apos-locale-item {
   @include apos-transition();
-  position: relative;
-  padding: 12px 35px;
-  line-height: 1;
-  border-radius: var(--a-border-radius);
 
-  &:not(.apos-current-locale) {
+  & {
+    position: relative;
+    padding: 12px 35px;
+    line-height: 1;
+    border-radius: var(--a-border-radius);
+  }
+
+  &:not(.apos-current-locale),
+  &:not(.apos-disabled-locale) {
     cursor: pointer;
   }
 
-  &:not(.apos-current-locale):hover {
+  &:not(.apos-current-locale):hover,
+  &:not(.apos-disabled-locale):hover {
     background-color: var(--a-base-10);
   }
 
-  &:not(.apos-current-locale):active {
+  &:not(.apos-current-locale):active,
+  &:not(.apos-disabled-locale):active {
     background-color: var(--a-base-9);
   }
 
@@ -953,11 +1366,13 @@ export default {
   }
 
   &.apos-current-locale,
+  &.apos-disabled-locale,
   .apos-current-locale-icon {
     color: var(--a-base-5);
   }
 
-  &.apos-current-locale {
+  &.apos-current-locale,
+  &.apos-disabled-locale {
     font-style: italic;
   }
 
@@ -978,18 +1393,25 @@ export default {
   }
 }
 
+.apos-wizard__step  :deep(.apos-field--related-doc-types-to-localize) {
+  margin-top: $spacing-triple;
+}
+
 .apos-wizard__step {
-  .apos-field__wrapper:not(:last-of-type) {
-    margin-bottom: $spacing-triple;
+  .apos-field__wrapper {
+    margin-bottom: $spacing-double;
   }
 }
 
 .apos-wizard__field-group-heading {
   @include type-base;
-  padding-bottom: $spacing-base;
-  margin-bottom: $spacing-base;
-  color: var(--a-base-3);
-  border-bottom: 1px solid var(--a-base-8);
+
+  & {
+    margin-bottom: $spacing-base;
+    padding-bottom: $spacing-base;
+    border-bottom: 1px solid var(--a-base-8);
+    color: var(--a-base-3);
+  }
 }
 
 .apos-wizard__field-group-heading__info {
@@ -1011,6 +1433,7 @@ export default {
 .selected-list-enter-active, .selected-list-leave-active {
   @include apos-transition($duration: 0.3s);
 }
+
 .selected-list-enter, .selected-list-leave-to {
   opacity: 0;
   transform: translateY(1px);
@@ -1022,5 +1445,38 @@ export default {
 
 .apos-locale-name {
   text-transform: uppercase;
+}
+
+.apos-wizard__translation {
+  margin-top: 30px;
+}
+
+.apos-wizard__translation-title {
+  @include type-label;
+
+  & {
+    display: flex;
+    align-items: center;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--a-base-8);
+  }
+}
+
+.apos-wizard__translation-title-text {
+  margin-left: 7px;
+}
+
+.apos-wizard__translation-error {
+  @include type-label;
+
+  & {
+    color: var(--a-danger);
+  }
+}
+
+.apos-wizard__translation-spinner {
+  display: flex;
+  justify-content: center;
+  margin-top: 20px;
 }
 </style>

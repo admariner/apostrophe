@@ -2,11 +2,13 @@
   <nav :class="['apos-breadcrumb', classObj]" aria-label="breadcrumb">
     <ol class="apos-breadcrumb__items">
       <li
-        v-for="(item, index) in items" :key="index"
+        v-for="(item, index) in items"
+        :key="index"
         :class="`apos-breadcrumb__item ${modifier}`"
       >
         <component
-          :is="item.target ? 'button' : 'span'" :data-apos-target="item.target"
+          :is="item.target ? 'button' : 'span'"
+          :data-apos-target="item.target"
           :type="item.target ? 'button' : null"
           :aria-label="item.target ? {
             key: 'apostrophe:returnToPage',
@@ -17,8 +19,9 @@
           {{ item.label }}
         </component>
         <ChevronRightIcon
-          class="apos-breadcrumb__chevron" :size="13"
           v-if="index !== last"
+          class="apos-breadcrumb__chevron"
+          :size="13"
         />
       </li>
     </ol>
@@ -26,7 +29,7 @@
 </template>
 
 <script>
-import ChevronRightIcon from 'vue-material-design-icons/ChevronRight.vue';
+import ChevronRightIcon from '@apostrophecms/vue-material-design-icons/ChevronRight.vue';
 
 export default {
   name: 'AposModalBreadcrumbs',
@@ -35,7 +38,7 @@ export default {
   },
   props: {
     label: {
-      default: 'Set a label',
+      default: 'apostrophe:modalBreadcrumbsDefaultLabel',
       type: String
     },
     modifier: {
@@ -76,21 +79,29 @@ export default {
       color: var(--a-white);
     }
   }
+
   .apos-breadcrumb__items {
     display: inline-block;
     margin: $spacing-base $spacing-double;
     padding-left: 0;
   }
+
   .apos-breadcrumb__item {
     @include type-small;
-    display: inline-flex;
-    align-items: center;
-    color: var(--a-text-primary);
+
+    & {
+      display: inline-flex;
+      align-items: center;
+      color: var(--a-text-primary);
+    }
 
     button {
       @include apos-button-reset();
       @include link-primary;
-      text-decoration: none;
+
+      & {
+        text-decoration: none;
+      }
 
       .apos-breadcrumb--dark & {
         color: inherit;
@@ -101,6 +112,7 @@ export default {
       text-decoration: underline;
     }
   }
+
   .apos-breadcrumb__chevron {
     display: flex;
     margin: 0 4px;

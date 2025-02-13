@@ -1,15 +1,15 @@
 <template>
   <div
     class="apos-image-cropper"
-    @click="onImageClick"
     :style="{
       height: cropperHeight
     }"
+    @click="onImageClick"
   >
     <span
-      class="apos-image-focal-point"
       ref="focalPoint"
       v-apos-tooltip="'apostrophe:focalPoint'"
+      class="apos-image-focal-point"
       @mousedown="onFocalPointMouseDown"
     />
     <cropper
@@ -18,19 +18,19 @@
         ? attachment._urls.uncropped.original
         : attachment._urls.original"
       :debounce="0"
-      @ready="onCropperReady"
-      @change="onCropperChange"
       :default-size="defaultSize"
       :default-position="defaultPosition"
       :stencil-props="stencilProps"
       :min-width="minSize[0]"
       :min-height="minSize[1]"
+      @ready="onCropperReady"
+      @change="onCropperChange"
     />
   </div>
 </template>
 
 <script>
-import { debounce } from 'Modules/@apostrophecms/ui/utils';
+import debounce from 'lodash/debounce';
 import { Cropper } from 'vue-advanced-cropper';
 import 'vue-advanced-cropper/dist/style.css';
 
@@ -105,6 +105,7 @@ export default {
     },
     aspectRatio: {
       handler(newVal) {
+        this.$refs.cropper.reset();
         this.stencilProps.aspectRatio = newVal;
         this.$refs.cropper.refresh();
       }
@@ -127,7 +128,11 @@ export default {
       left: this.docFields.data.left
     };
   },
-  beforeDestroy() {
+  beforeUnmount() {
+    this.onScreenResizeDebounced.cancel();
+    this.handleCropperChangeDebounced.cancel();
+    this.setCropperCoordinatesDebounced.cancel();
+    this.updateFocalPointCoordinatesDebounced.cancel();
     this.$refs.focalPoint.removeEventListener('mousedown', this.onFocalPointMouseDown);
     window.removeEventListener('resize', this.onScreenResizeDebounced);
   },
@@ -434,7 +439,7 @@ export default {
     border: 1px solid var(--a-white);
     background-color: var(--a-primary);
     box-shadow: 0 0 4px var(--a-black);
-    transition: left 0.15s ease, top 0.15s ease;
+    transition: left 200ms ease, top 200ms ease;
     cursor: grab;
   }
 }

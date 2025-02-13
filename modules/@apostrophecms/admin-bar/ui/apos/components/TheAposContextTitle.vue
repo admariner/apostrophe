@@ -6,8 +6,8 @@
   >
     <span
       v-show="true"
-      class="apos-admin-bar__title"
       :key="'title'"
+      class="apos-admin-bar__title"
     >
       <AposIndicator
         icon="information-outline-icon"
@@ -18,23 +18,37 @@
       <span class="apos-admin-bar__title__document-title">
         {{ context.title }}
       </span>
-      <span class="apos-admin-bar__title__separator">
-        —
-      </span>
-      <AposContextMenu
-        v-if="!isUnpublished"
-        class="apos-admin-bar__title__document"
-        :button="draftButton"
-        :menu="draftMenu"
-        :disabled="hasCustomUi || isUnpublished"
-        @item-clicked="switchDraftMode"
-        menu-offset="13, 10"
-        menu-placement="bottom-end"
-      />
+      <div
+        v-if="!isAutopublished"
+        class="apos-admin-bar__title__context"
+      >
+        <span class="apos-admin-bar__title__separator">
+          —
+        </span>
+        <AposContextMenu
+          v-if="!isUnpublished"
+          class="apos-admin-bar__title__document"
+          :button="draftButton"
+          :menu="draftMenu"
+          :disabled="hasCustomUi || isUnpublished"
+          :center-on-icon="true"
+          menu-placement="bottom-end"
+          @item-clicked="switchDraftMode"
+        />
+        <AposLabel
+          v-else
+          :label="'apostrophe:draft'"
+          :tooltip="'apostrophe:notYetPublished'"
+          :modifiers="['apos-is-warning', 'apos-is-filled']"
+        />
+      </div>
       <AposLabel
-        v-else
-        label="apostrophe:draft" :modifiers="['apos-is-warning', 'apos-is-filled']"
-        tooltip="apostrophe:notYetPublished"
+        v-for="{id, label, tooltip = '', modifiers = []} in moduleOptions.contextLabels"
+        :key="id"
+        class="apos-admin-bar__title-context-label"
+        :label="label"
+        :tooltip="tooltip"
+        :modifiers="modifiers"
       />
     </span>
   </transition-group>
@@ -102,9 +116,30 @@ export default {
           modifiers: (this.draftMode === 'published') ? [ 'disabled', 'selected' ] : null
         }
       ];
+    },
+    canTogglePublishDraftMode() {
+      return !this.isUnpublished && !this.hasCustomUi;
+    },
+    moduleOptions() {
+      return window.apos.adminBar;
+    },
+    isAutopublished() {
+      return this.context._aposAutopublish ?? (window.apos.modules[this.context.type].autopublish || false);
     }
   },
+  mounted() {
+    apos.bus.$on('command-menu-admin-bar-toggle-publish-draft', this.togglePublishDraftMode);
+  },
+  unmounted() {
+    apos.bus.$off('command-menu-admin-bar-toggle-publish-draft', this.togglePublishDraftMode);
+  },
   methods: {
+    togglePublishDraftMode() {
+      if (this.canTogglePublishDraftMode) {
+        const mode = this.draftMode === 'draft' ? 'published' : 'draft';
+        this.switchDraftMode(mode);
+      }
+    },
     switchDraftMode(mode) {
       this.$emit('switch-draft-mode', mode);
     }
@@ -113,14 +148,16 @@ export default {
 </script>
 <style lang="scss" scoped>
 .apos-admin-bar__control-set--title {
-  justify-content: center;
   align-items: center;
+  justify-content: center;
 }
+
 .apos-admin-bar__title {
   display: inline-flex;
   align-items: center;
   white-space: nowrap;
 
+  &__context,
   &__document-title,
   &__separator {
     display: inline-flex;
@@ -133,13 +170,21 @@ export default {
 
   &__separator {
     align-items: center;
-    padding: 0 7px;
     margin-top: 1px;
+    padding: 0 7px;
   }
 
   &__document {
     margin-top: 3.5px;
+
+    :deep(.apos-context-menu__pane) {
+      min-width: 150px;
+    }
   }
+}
+
+.apos-admin-bar__title-context-label  {
+  margin-left: 5px;
 }
 
 .apos-admin-bar__title__indicator {

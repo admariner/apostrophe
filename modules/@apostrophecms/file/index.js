@@ -18,12 +18,14 @@ module.exports = {
     insertViaUpload: true,
     slugPrefix: 'file-',
     autopublish: true,
+    versions: true,
     editRole: 'editor',
     publishRole: 'editor',
     showPermissions: true,
     // Files should by default be considered "related documents" when localizing
     // another document that references them
-    relatedDocument: true
+    relatedDocument: true,
+    relationshipSuggestionIcon: 'file-document-icon'
   },
   fields: {
     remove: [ 'visibility' ],

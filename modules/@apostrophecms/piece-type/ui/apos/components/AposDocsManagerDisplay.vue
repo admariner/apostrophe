@@ -6,23 +6,26 @@
           class="apos-table__header"
         />
         <th
-          v-for="header in headers" scope="col"
-          class="apos-table__header" :key="header.label"
+          v-for="header in headers"
+          :key="header.label"
+          scope="col"
+          class="apos-table__header"
           :class="`apos-table__header--${header.name}`"
         >
           <component
-            :is="getEl(header)" class="apos-table__header-label"
+            :is="getEl(header)"
+            class="apos-table__header-label"
           >
             <component
-              v-if="header.labelIcon"
               :is="icons[header.labelIcon]"
+              v-if="header.labelIcon"
               :size="iconSize(header)"
               class="apos-table__header-icon"
             />
             {{ $t(header.label) }}
           </component>
         </th>
-        <th class="apos-table__header" key="contextMenu">
+        <th key="contextMenu" class="apos-table__header">
           <component
             :is="getEl({})"
             class="apos-table__header-label apos-is-hidden"
@@ -32,42 +35,49 @@
         </th>
       </tr>
       <tr
-        class="apos-table__row"
         v-for="item in items"
         :key="item._id"
+        class="apos-table__row"
         :class="{'apos-is-selected': false }"
-        @mouseover="over(item._id)" @mouseout="out(item._id)"
+        @mouseover="over(item._id)"
+        @mouseout="out(item._id)"
       >
         <td
           class="apos-table__cell"
         >
           <AposCheckbox
             v-if="item._id"
+            v-model="checkProxy"
+            v-apos-tooltip="options.disableUnpublished && !item.lastPublishedAt ? 'apostrophe:publishBeforeUsingTooltip' : null"
             :field="{
               name: item._id,
               hideLabel: true,
-              label: `Toggle selection of ${item.title}`,
+              label: $t({
+                key: 'apostrophe:toggleSelectionOf',
+                title: item.title
+              }),
               readOnly:
                 (options.disableUnchecked && !checkProxy.includes(item._id)) ||
                 (options.disableUnpublished && !item.lastPublishedAt)
             }"
-            v-apos-tooltip="options.disableUnpublished && !item.lastPublishedAt ? 'apostrophe:publishBeforeUsingTooltip' : null"
             :choice="{ value: item._id }"
-            v-model="checkProxy"
             @updated="emitUpdated(item._id)"
           />
         </td>
         <td
           v-for="header in headers"
+          :key="header.name"
           class="apos-table__cell apos-table__cell--pointer"
           :class="`apos-table__cell--${header.name}`"
-          :key="header.name"
-          @click="options.canEdit && $emit('open', item)"
+          @click="canEdit(item) && $emit('open', item)"
         >
           <component
-            v-if="header.component" :is="header.component"
-            :header="header" :item="item._publishedDoc || item"
-            :draft="item" :published="item._publishedDoc"
+            :is="header.component"
+            v-if="header.component"
+            :header="header"
+            :item="item._publishedDoc || item"
+            :draft="item"
+            :published="item._publishedDoc"
             :manually-published="options.manuallyPublished"
           />
           <AposCellBasic
@@ -78,9 +88,10 @@
           />
         </td>
         <!-- append the context menu -->
-        <td v-if="options.canEdit" class="apos-table__cell apos-table__cell--context-menu">
+        <td class="apos-table__cell apos-table__cell--context-menu">
           <AposCellContextMenu
-            :state="state[item._id]" :item="item"
+            :state="state[item._id]"
+            :item="item"
             :draft="item"
             :published="item._publishedDoc"
             :header="{
@@ -99,10 +110,6 @@
 <script>
 import { klona } from 'klona';
 export default {
-  model: {
-    prop: 'checked',
-    event: 'change'
-  },
   props: {
     headers: {
       type: Array,
@@ -126,8 +133,8 @@ export default {
     }
   },
   emits: [
+    'update:checked',
     'open',
-    'change',
     'updated'
   ],
   data() {
@@ -149,7 +156,7 @@ export default {
         return this.checked;
       },
       set(val) {
-        this.$emit('change', val);
+        this.$emit('update:checked', val);
       }
     },
     contextMenuOptions() {
@@ -162,6 +169,13 @@ export default {
     }
   },
   methods: {
+    canEdit(item) {
+      if (item._id) {
+        return item._edit || this.options.canLocalize;
+      }
+
+      return this.options.canEdit || this.options.canLocalize;
+    },
     over(id) {
       this.state[id].hover = true;
     },

@@ -41,7 +41,7 @@
 const Passport = require('passport').Passport;
 const LocalStrategy = require('passport-local');
 const Promise = require('bluebird');
-const cuid = require('cuid');
+const { createId } = require('@paralleldrive/cuid2');
 const expressSession = require('express-session');
 
 const loginAttemptsNamespace = '@apostrophecms/loginAttempt';
@@ -51,7 +51,13 @@ module.exports = {
   cascades: [ 'requirements' ],
   options: {
     alias: 'login',
+    placeholder: {
+      username: 'apostrophe:enterUsername',
+      password: 'apostrophe:enterPassword'
+    },
     localLogin: true,
+    passwordReset: false,
+    passwordResetHours: 48,
     scene: 'apos',
     csrfExceptions: [
       'login'
@@ -72,6 +78,7 @@ module.exports = {
     }
     self.enableBrowserData();
     await self.enableBearerTokens();
+    self.addToAdminBar();
   },
   handlers(self) {
     return {
@@ -245,63 +252,92 @@ module.exports = {
         async context(req) {
           return self.getContext(req);
         },
-        ...(self.options.passwordReset ? {
+        ...(self.isPasswordResetEnabled() ? {
           async resetRequest(req) {
+            const wait = (t = 2000) => Promise.delay(t);
             const site = (req.headers.host || '').replace(/:\d+$/, '');
-            const username = self.apos.launder.string(req.body.username);
-            if (!username.length) {
-              throw self.apos.error('invalid');
+            const email = self.apos.launder.string(req.body.email);
+            if (!email.length) {
+              throw self.apos.error('invalid', req.t('apostrophe:loginResetEmailRequired'));
             }
-            const clauses = [];
-            clauses.push({ username: username });
-            clauses.push({ email: username });
-            const user = await self.apos.user.find(req, { $or: clauses }).permission(false).toObject();
+            let user;
+            // error not reported to browser for security reasons
+            try {
+              user = await self.getPasswordResetUser(req.body.email);
+            } catch (e) {
+              self.apos.util.error(e);
+            }
             if (!user) {
-              throw self.apos.error('notfound');
+              await wait();
+              self.apos.util.error(
+                `Reset password request error - the user ${email} doesn\`t exist.`
+              );
+              return;
             }
             if (!user.email) {
-              throw self.apos.error('invalid');
+              await wait();
+              self.apos.util.error(
+                `Reset password request error - the user ${user.username} doesn\`t have an email.`
+              );
+              return;
             }
             const reset = self.apos.util.generateId();
             user.passwordReset = reset;
             user.passwordResetAt = new Date();
             await self.apos.user.update(req, user, { permissions: false });
-            const parsed = new URL(req.absoluteUrl);
-            parsed.pathname = '/password-reset';
+            // Fix - missing host in the absoluteUrl results in a panic.
+            let port = (req.headers.host || '').split(':')[1];
+            if (!port || [ '80', '443' ].includes(port)) {
+              port = '';
+            } else {
+              port = `:${port}`;
+            }
+            const parsed = new URL(
+              req.absoluteUrl,
+              self.apos.baseUrl
+                ? undefined
+                : `${req.protocol}://${req.hostname}${port}`
+            );
+            parsed.pathname = self.login();
             parsed.search = '?';
             parsed.searchParams.append('reset', reset);
             parsed.searchParams.append('email', user.email);
             try {
               await self.email(req, 'passwordResetEmail', {
-                user: user,
+                user,
                 url: parsed.toString(),
-                site: site
+                site
               }, {
                 to: user.email,
                 subject: req.t('apostrophe:passwordResetRequest', { site })
               });
             } catch (err) {
-              throw self.apos.error('email');
+              self.apos.util.error(`Error while sending email to ${user.email}`, err);
             }
           },
 
           async reset(req) {
-            const reset = self.apos.launder.string(req.body.reset);
-            const email = self.apos.launder.string(req.body.email);
             const password = self.apos.launder.string(req.body.password);
-            if (!reset.length || !password.length) {
-              throw self.apos.error('invalid');
+            if (!password.length) {
+              throw self.apos.error('invalid', req.t('apostrophe:loginResetPasswordRequired'));
             }
-            const adminReq = self.apos.task.getReq();
-            const user = await self.apos.user.find(adminReq, {
-              email: email,
-              passwordResetAt: { $gte: new Date(Date.now() - self.getPasswordResetLifetimeInMilliseconds()) }
-            });
-            if (!user) {
-              throw self.apos.error('notfound');
+            let user;
+            try {
+              user = await self.getPasswordResetUser(
+                req.body.email,
+                // important, empty to string to avoid security problems
+                req.body.reset || ''
+              );
+
+            } catch (e) {
+              self.apos.util.error(e);
+              throw self.apos.error('invalid', req.t('apostrophe:loginResetInvalid'));
             }
-            await self.apos.user.verifySecret(user, 'passwordReset', reset);
-            return user;
+
+            user.passwordReset = null;
+            user.passwordResetAt = new Date(0);
+            user.password = password;
+            await self.apos.user.update(req, user, { permissions: false });
           }
         } : {})
       },
@@ -312,6 +348,19 @@ module.exports = {
         // be cached
         async context(req) {
           return self.getContext(req);
+        },
+        async reset(req) {
+          try {
+            await self.getPasswordResetUser(
+              req.query.email,
+              // important, empty to string to avoid security problems
+              req.query.reset || ''
+            );
+
+          } catch (e) {
+            self.apos.util.error(e);
+            throw self.apos.error('invalid', req.t('apostrophe:loginResetInvalid'));
+          }
         }
       }
     };
@@ -338,8 +387,9 @@ module.exports = {
             }
           }
         }
+
         return {
-          env: process.env.NODE_ENV || 'development',
+          env: process.env.APOS_ENV_LABEL || self.options.environmentLabel || process.env.NODE_ENV || 'development',
           name: (process.env.npm_package_name && process.env.npm_package_name.replace(/-/g, ' ')) || 'Apostrophe',
           version: aposPackage.version || '3',
           requirementProps
@@ -407,7 +457,7 @@ module.exports = {
       // Users with the `disabled` property set to true may not log in.
       // Passwords are verified via the `verifyPassword` method of
       // [@apostrophecms/user](../@apostrophecms/user/index.html), which is
-      // powered by the [credential](https://npmjs.org/package/credential) module.
+      // powered by the [credentials](https://npmjs.org/package/credentials) module.
 
       enableLocalStrategy() {
         self.passport.use(new LocalStrategy(self.localStrategy));
@@ -434,26 +484,46 @@ module.exports = {
       //
       // If the user's login SUCCEEDS, the return value is
       // the `user` object.
+      // `attempts`,  `ip` and `requestId` are optional, sent for only logging needs. They won't
+      // be available with passport.
 
-      async verifyLogin(username, password) {
+      async verifyLogin(username, password, attempts = 0, ip, requestId) {
         const req = self.apos.task.getReq();
         const user = await self.apos.user.find(req, {
           $or: [
-            { username: username },
+            { username },
             { email: username }
           ],
           disabled: { $ne: true }
         }).toObject();
 
         if (!user) {
+          self.logInfo('incorrect-username', {
+            username,
+            ip,
+            attempts: attempts + 1,
+            requestId
+          });
           await Promise.delay(1000);
           return false;
         }
         try {
           await self.apos.user.verifyPassword(user, password);
+          self.logInfo('correct-password', {
+            username,
+            ip,
+            attempts,
+            requestId
+          });
           return user;
         } catch (err) {
           if (err.name === 'invalid') {
+            self.logInfo('incorrect-password', {
+              username,
+              ip,
+              attempts: attempts + 1,
+              requestId
+            });
             await Promise.delay(1000);
             return false;
           } else {
@@ -467,9 +537,15 @@ module.exports = {
         return 1000 * 60 * 60 * (self.options.passwordResetHours || 48);
       },
 
+      isPasswordResetEnabled() {
+        return self.options.localLogin && self.options.passwordReset;
+      },
+
       getBrowserData(req) {
         return {
+          schema: self.getSchema(),
           action: self.action,
+          passwordResetEnabled: self.isPasswordResetEnabled(),
           ...(req.user ? {
             user: {
               _id: req.user._id,
@@ -489,6 +565,54 @@ module.exports = {
             })
           )
         };
+      },
+
+      // Get a user by EITHER:
+      // - username/email
+      // - username/email AND reset token
+      // `resetToken` can be `false` or `string`. Passing any other type
+      // will be converted to string and used for searching the user.
+      async getPasswordResetUser(usernameOrEmail, resetToken = false) {
+        if (!self.isPasswordResetEnabled()) {
+          return null;
+        }
+        const reset = self.apos.launder.string(resetToken);
+        const email = self.apos.launder.string(usernameOrEmail);
+
+        if (!email.length) {
+          throw self.apos.error('invalid');
+        }
+        if (resetToken !== false && !reset.length) {
+          throw self.apos.error('invalid');
+        }
+        const adminReq = self.apos.task.getReq();
+        const criteriaOr = [
+          { username: email },
+          { email }
+        ];
+        const criteriaAnd = {};
+        if (resetToken !== false) {
+          criteriaAnd.passwordResetAt = {
+            $gte: new Date(Date.now() - self.getPasswordResetLifetimeInMilliseconds())
+          };
+        }
+        const user = await self.apos.user
+          .find(adminReq, {
+            $or: criteriaOr,
+            ...criteriaAnd
+          })
+          .toObject();
+        if (!user) {
+          throw self.apos.error('notfound');
+        }
+        if (resetToken !== false) {
+          await self.apos.user.verifySecret(
+            user,
+            'passwordReset',
+            reset
+          );
+        }
+        return user;
       },
 
       async checkForUserAndAlert() {
@@ -543,12 +667,19 @@ module.exports = {
             _id: token.userId
           });
           await self.passportLogin(req, user);
+          // No access to login attempts in the final phase.
+          self.logInfo(req, 'complete', {
+            username: user.username
+          });
         } else {
           delete token.requirementsToVerify;
           self.bearerTokens.updateOne(token, {
             $unset: {
               requirementsToVerify: 1
             }
+          });
+          self.logInfo(req, 'complete', {
+            username: user.username
           });
           return {
             token
@@ -587,6 +718,18 @@ module.exports = {
         };
       },
 
+      async verifyRequirements(req, requirements) {
+        for (const [ name, requirement ] of Object.entries(requirements)) {
+          try {
+            await requirement.verify(req, req.body.requirements && req.body.requirements[name]);
+          } catch (e) {
+            e.data = e.data || {};
+            e.data.requirement = name;
+            throw e;
+          }
+        }
+      },
+
       // Implementation detail of the login route. Log in the user, or if there are
       // `requirements` that require password verification occur first, return an incomplete token.
       async initialLogin(req) {
@@ -598,6 +741,7 @@ module.exports = {
         }
 
         const { cachedAttempts, reached } = await self.checkLoginAttempts(username);
+        const logAttempts = cachedAttempts ?? 0;
 
         if (reached) {
           throw self.apos.error('invalid', req.t('apostrophe:loginMaxAttemptsReached', {
@@ -607,28 +751,32 @@ module.exports = {
 
         try {
           // Initial login step
-          const { earlyRequirements, lateRequirements } = self.filterRequirements();
-          for (const [ name, requirement ] of Object.entries(earlyRequirements)) {
-            try {
-              await requirement.verify(req, req.body.requirements && req.body.requirements[name]);
-            } catch (e) {
-              e.data = e.data || {};
-              e.data.requirement = name;
-              throw e;
-            }
-          }
-          const user = await self.apos.login.verifyLogin(username, password);
+          const {
+            earlyRequirements,
+            onTimeRequirements,
+            lateRequirements
+          } = self.filterRequirements();
+          await self.verifyRequirements(req, earlyRequirements);
+          await self.verifyRequirements(req, onTimeRequirements);
+
+          // send log information
+          const user = await self.apos.login.verifyLogin(
+            username,
+            password,
+            logAttempts,
+            self.apos.structuredLog.getIp(req),
+            self.apos.structuredLog.getRequestId(req)
+          );
           if (!user) {
           // For security reasons we may not tell the user which case applies
             throw self.apos.error('invalid', req.t('apostrophe:loginPageBadCredentials'));
           }
 
           const requirementsToVerify = Object.keys(lateRequirements);
-
           if (requirementsToVerify.length) {
-            const token = cuid();
+            const token = createId();
 
-            await self.bearerTokens.insert({
+            await self.bearerTokens.insertOne({
               _id: token,
               userId: user._id,
               requirementsToVerify,
@@ -648,16 +796,24 @@ module.exports = {
           if (session) {
             await self.passportLogin(req, user);
             await self.clearLoginAttempts(user.username);
+            self.logInfo(req, 'complete', {
+              username,
+              attempts: logAttempts
+            });
             return {};
           } else {
-            const token = cuid();
-            await self.bearerTokens.insert({
+            const token = createId();
+            await self.bearerTokens.insertOne({
               _id: token,
               userId: user._id,
               expires: new Date(new Date().getTime() + (self.options.bearerTokens.lifetime || (86400 * 7 * 2)) * 1000)
             });
 
             await self.clearLoginAttempts(user.username);
+            self.logInfo(req, 'complete', {
+              username,
+              attempts: logAttempts
+            });
 
             return {
               token
@@ -671,15 +827,12 @@ module.exports = {
       },
 
       filterRequirements() {
+        const requirements = Object.entries(self.requirements);
+
         return {
-          earlyRequirements: Object.fromEntries(
-            Object.entries(self.requirements)
-              .filter(([ _, requirement ]) => requirement.phase === 'beforeSubmit')
-          ),
-          lateRequirements: Object.fromEntries(
-            Object.entries(self.requirements)
-              .filter(([ _, requirement ]) => requirement.phase === 'afterPasswordVerified')
-          )
+          earlyRequirements: Object.fromEntries(requirements.filter(([ , requirement ]) => requirement.phase === 'beforeSubmit')),
+          onTimeRequirements: Object.fromEntries(requirements.filter(requirement => requirement.phase === 'uponSubmit')),
+          lateRequirements: Object.fromEntries(requirements.filter(([ , requirement ]) => requirement.phase === 'afterPasswordVerified'))
         };
       },
 
@@ -748,10 +901,32 @@ module.exports = {
       },
 
       async clearLoginAttempts (username, namespace = loginAttemptsNamespace) {
-        await self.apos.cache.cacheCollection.deleteOne({
-          namespace,
-          key: username
-        });
+        await self.apos.cache.delete(namespace, username);
+      },
+
+      addToAdminBar() {
+        self.apos.adminBar.add(
+          `${self.__meta.name}-logout`,
+          'apostrophe:logOut',
+          false,
+          {
+            user: true,
+            last: true
+          }
+        );
+      },
+
+      getSchema() {
+        return self.apos.user.schema
+          .filter(({ name }) => [ 'username', 'password' ].includes(name))
+          .map(field => ({
+            name: field.name,
+            label: field.label,
+            placeholder: self.options.placeholder[field.name],
+            type: field.type,
+            required: true
+          })
+          );
       }
     };
   },
@@ -780,7 +955,11 @@ module.exports = {
               if (err) {
                 return callback(err);
               }
-              await self.emit('afterSessionLogin', req);
+              try {
+                await self.emit('afterSessionLogin', req);
+              } catch (e) {
+                return callback(e);
+              }
               // Make sure no handler removed req.user
               if (req.user) {
                 // Mark the login timestamp. Middleware takes care of ensuring

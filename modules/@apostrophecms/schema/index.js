@@ -17,17 +17,19 @@ const _ = require('lodash');
 const { klona } = require('klona');
 const { stripIndents } = require('common-tags');
 const addFieldTypes = require('./lib/addFieldTypes');
+const newInstance = require('./lib/newInstance.js');
 
 module.exports = {
   options: {
     alias: 'schema'
   },
   init(self) {
-
     self.fieldTypes = {};
     self.fieldsById = {};
     self.arrayManagers = {};
     self.objectManagers = {};
+    self.fieldMetadataComponents = [];
+    self.uiManagerIndicators = [];
 
     self.enableBrowserData();
 
@@ -366,16 +368,7 @@ module.exports = {
       // Return a new object with all default settings
       // defined in the schema
       newInstance(schema) {
-        const instance = {};
-        for (const field of schema) {
-          if (field.def !== undefined) {
-            instance[field.name] = klona(field.def);
-          } else {
-            // All fields should have an initial value in the database
-            instance[field.name] = null;
-          }
-        }
-        return instance;
+        return newInstance(schema);
       },
 
       subsetInstance(schema, instance) {
@@ -421,6 +414,13 @@ module.exports = {
         });
       },
 
+      // Wrapper around isEqual method to get modified fields between two documents
+      // instead of just getting a boolean, it will return an array of the modified fields
+
+      getChanges(req, schema, one, two) {
+        return self.isEqual(req, schema, one, two, { getChanges: true });
+      },
+
       // Compare two objects and return true only if their schema fields are equal.
       //
       // Note that for relationship fields this comparison is based on the idsStorage
@@ -431,22 +431,40 @@ module.exports = {
       // This method is invoked by the doc module to compare draft and published
       // documents and set the modified property of the draft, just before updating the
       // published version.
+      //
+      // When passing the option `getChange: true` it'll return an array of changed fields
+      // in this case the method won't short circuit by directly returning false
+      // when finding a changed field
 
-      isEqual(req, schema, one, two) {
+      isEqual(req, schema, one, two, options = {}) {
+        const changedFields = [];
         for (const field of schema) {
           const fieldType = self.fieldTypes[field.type];
-          if (!fieldType.isEqual) {
-            if ((!_.isEqual(one[field.name], two[field.name])) &&
-              !((one[field.name] == null) && (two[field.name] == null))) {
-              return false;
-            }
-          } else {
+
+          if (fieldType.isEqual) {
             if (!fieldType.isEqual(req, field, one, two)) {
+              if (options.getChanges) {
+                changedFields.push(field.name);
+              } else {
+                return false;
+              }
+            }
+            continue;
+          }
+
+          if (
+            !_.isEqual(one[field.name], two[field.name]) &&
+            !((one[field.name] == null) && (two[field.name] == null))
+          ) {
+            if (options.getChanges) {
+              changedFields.push(field.name);
+            } else {
               return false;
             }
           }
         }
-        return true;
+
+        return options.getChanges ? changedFields : true;
       },
 
       // Index the object's fields for participation in Apostrophe search unless
@@ -465,6 +483,85 @@ module.exports = {
         });
       },
 
+      async evaluateCondition(req, field, clause, destination, conditionalFields) {
+        for (const [ key, val ] of Object.entries(clause)) {
+          const destinationKey = _.get(destination, key);
+
+          if (key === '$or') {
+            const results = await Promise.all(
+              val.map(clause => self.evaluateCondition(
+                req,
+                field,
+                clause,
+                destination,
+                conditionalFields)
+              )
+            );
+            const testResults = _.isPlainObject(results?.[0])
+              ? results.some(({ value }) => value)
+              : results.some((value) => value);
+            if (!testResults) {
+              return false;
+            }
+            continue;
+          } else if (val.$ne) {
+            if (val.$ne === destinationKey) {
+              return false;
+            }
+            continue;
+          }
+
+          // Handle external conditions:
+          //  - `if: { 'methodName()': true }`
+          //  - `if: { 'moduleName:methodName()': 'expected value' }`
+          // Checking if key ends with a closing parenthesis here to throw later if any argument is passed.
+          if (key.endsWith(')')) {
+            let externalConditionResult;
+
+            try {
+              externalConditionResult = await self.evaluateMethod(req, key, field.name, field.moduleName, destination._id);
+            } catch (error) {
+              throw self.apos.error('invalid', error.message);
+            }
+
+            if (externalConditionResult !== val) {
+              return false;
+            };
+
+            // Stop there, this is an external condition thus
+            // does not need to be checked against doc fields.
+            continue;
+          }
+
+          // test with Object.prototype for the case val.min === 0
+          if (Object.hasOwn(val, 'min') || Object.hasOwn(val, 'max')) {
+            if (destinationKey < val.min) {
+              return false;
+            }
+            if (destinationKey > val.max) {
+              return false;
+            }
+            continue;
+          }
+
+          if (conditionalFields?.[key] === false) {
+            return false;
+          }
+
+          if (destinationKey !== val) {
+            return false;
+          }
+        }
+
+        return true;
+      },
+
+      async isFieldRequired(req, field, destination) {
+        return field.requiredIf
+          ? await self.evaluateCondition(req, field, field.requiredIf, destination)
+          : field.required;
+      },
+
       // Convert submitted `data` object according to `schema`, sanitizing it
       // and populating the appropriate properties of `destination` with it.
       //
@@ -481,75 +578,276 @@ module.exports = {
       // may  be a short string such as `required` or `min` that can be used to
       // set error class names, etc. If the error is not a string, it is a
       // database error etc. and should not be displayed in the browser directly.
+      //
+      // ancestors consists of an array of objects where each represents
+      // the context object at each level of nested sanitization, excluding
+      // `destination` (the current level). This allows resolution of relative
+      // `following` paths during sanitization.
 
-      async convert(req, schema, data, destination) {
+      async convert(
+        req,
+        schema,
+        data,
+        destination,
+        {
+          fetchRelationships = true,
+          ancestors = [],
+          rootConvert = true
+        } = {}
+      ) {
+        const options = {
+          fetchRelationships,
+          ancestors
+        };
         if (Array.isArray(req)) {
           throw new Error('convert invoked without a req, do you have one in your context?');
         }
 
-        let errors = [];
-
+        const convertErrors = [];
         for (const field of schema) {
           if (field.readOnly) {
             continue;
           }
+
           // Fields that are contextual are left alone, not blanked out, if
           // they do not appear at all in the data object.
           if (field.contextual && !_.has(data, field.name)) {
             continue;
           }
-          const convert = self.fieldTypes[field.type].convert;
-          if (convert) {
-            try {
-              await convert(req, field, data, destination);
-            } catch (e) {
-              if (Array.isArray(e)) {
-                const invalid = self.apos.error('invalid', {
-                  errors: e
-                });
-                invalid.path = field.name;
-                errors.push(invalid);
-              } else {
-                if ((typeof e) !== 'string') {
-                  self.apos.util.error(e + '\n\n' + e.stack);
-                }
-                e.path = field.name;
-                errors.push(e);
+
+          const { convert } = self.fieldTypes[field.type];
+          if (!convert) {
+            continue;
+          }
+
+          try {
+            const isRequired = await self.isFieldRequired(req, field, destination);
+            await convert(
+              req,
+              {
+                ...field,
+                required: isRequired
+              },
+              data,
+              destination,
+              {
+                ...options,
+                rootConvert: false
               }
-            }
+            );
+          } catch (err) {
+            const error = Array.isArray(err)
+              ? self.apos.error('invalid', { errors: err })
+              : err;
+
+            error.path = field.name;
+            error.schemaPath = field.aposPath;
+            convertErrors.push(error);
           }
         }
 
-        errors = errors.filter(error => {
-          if ((error.name === 'required' || error.name === 'mandatory') && !self.isVisible(schema, destination, error.path)) {
-            // It is not reasonable to enforce required for
-            // fields hidden via conditional fields
-            return false;
+        if (!rootConvert) {
+          if (convertErrors.length) {
+            throw convertErrors;
           }
-          return true;
-        });
-        if (errors.length) {
-          throw errors;
+
+          return;
         }
+
+        const nonVisibleFields = await self.getNonVisibleFields({
+          req,
+          schema,
+          destination
+        });
+
+        const validErrors = await self.handleConvertErrors({
+          req,
+          schema,
+          convertErrors,
+          destination,
+          nonVisibleFields
+        });
+
+        for (const error of validErrors) {
+          self.apos.util.error(error.stack);
+        }
+
+        if (validErrors.length) {
+          throw validErrors;
+        }
+      },
+
+      async getNonVisibleFields({
+        req, schema, destination, nonVisibleFields = new Set(), fieldPath = ''
+      }) {
+        for (const field of schema) {
+          const curPath = fieldPath ? `${fieldPath}.${field.name}` : field.name;
+          const isVisible = await self.isVisible(req, schema, destination, field.name);
+          if (!isVisible) {
+            nonVisibleFields.add(curPath);
+            continue;
+          }
+          if (!field.schema) {
+            continue;
+          }
+
+          // Relationship does not support conditional fields right now
+          if ([ 'array' /*, 'relationship' */].includes(field.type) && field.schema) {
+            for (const arrayItem of destination[field.name] || []) {
+              await self.getNonVisibleFields({
+                req,
+                schema: field.schema,
+                destination: arrayItem,
+                nonVisibleFields,
+                fieldPath: `${curPath}.${arrayItem._id}`
+              });
+            }
+          } else if (field.type === 'object') {
+            await self.getNonVisibleFields({
+              req,
+              schema: field.schema,
+              destination: destination[field.name],
+              nonVisibleFields,
+              fieldPath: curPath
+            });
+          }
+        }
+
+        return nonVisibleFields;
+      },
+
+      async handleConvertErrors({
+        req,
+        schema,
+        convertErrors,
+        nonVisibleFields,
+        destination,
+        destinationPath = '',
+        hiddenAncestors = false
+      }) {
+        const validErrors = [];
+        for (const error of convertErrors) {
+          const [ destId, destPath ] = error.path.includes('.')
+            ? error.path.split('.')
+            : [ null, error.path ];
+
+          const curDestination = destId
+            ? destination.find(({ _id }) => _id === destId)
+            : destination;
+
+          const errorPath = destinationPath
+            ? `${destinationPath}.${error.path}`
+            : error.path;
+
+          // Case were this error field hasn't been treated
+          // Should check if path starts with, because parent can be invisible
+          const nonVisibleField = hiddenAncestors || nonVisibleFields.has(errorPath);
+
+          // We set default values only on final error fields
+          if (nonVisibleField && !error.data?.errors) {
+            const curSchema = self.getFieldLevelSchema(schema, error.schemaPath);
+            self.setDefaultToInvisibleField(curDestination, curSchema, error.path);
+            continue;
+          }
+
+          if (error.data?.errors) {
+            const subErrors = await self.handleConvertErrors({
+              req,
+              schema,
+              convertErrors: error.data.errors,
+              nonVisibleFields,
+              destination: curDestination[destPath],
+              destinationPath: errorPath,
+              hiddenAncestors: nonVisibleField
+            });
+
+            // If invalid error has no sub error, this one can be removed
+            if (!subErrors.length) {
+              continue;
+            }
+
+            error.data.errors = subErrors;
+          }
+          validErrors.push(error);
+        }
+
+        return validErrors;
+      },
+
+      setDefaultToInvisibleField(destination, schema, fieldPath) {
+        // Field path might contain the ID of the object in which it is contained
+        // We just want the field name here
+        const [ _id, fieldName ] = fieldPath.includes('.')
+          ? fieldPath.split('.')
+          : [ null, fieldPath ];
+        // It is not reasonable to enforce required,
+        // min, max or anything else for fields
+        // hidden via "if" as the user cannot correct it
+        // and it will not be used. If the user changes
+        // the conditional field later then they won't
+        // be able to save until the erroneous field
+        // is corrected
+        const field = schema.find(field => field.name === fieldName);
+        if (field) {
+          // To protect against security issues, an invalid value
+          // for a field that is not visible should be quietly discarded.
+          // We only worry about this if the value is not valid, as otherwise
+          // it's a kindness to save the work so the user can toggle back to it
+          destination[field.name] = klona((field.def !== undefined)
+            ? field.def
+            : self.fieldTypes[field.type]?.def);
+        }
+      },
+
+      getFieldLevelSchema(schema, fieldPath) {
+        if (!fieldPath || fieldPath === '/') {
+          return schema;
+        }
+        let curSchema = schema;
+        const parts = fieldPath.split('/');
+        parts.pop();
+        for (const part of parts) {
+          const curField = curSchema.find(({ name }) => name === part);
+          curSchema = curField.schema;
+        }
+
+        return curSchema;
       },
 
       // Determine whether the given field is visible
       // based on `if` conditions of all fields
-
-      isVisible(schema, object, name) {
+      async isVisible(req, schema, destination, name) {
         const conditionalFields = {};
+        const errors = {};
+
         while (true) {
           let change = false;
           for (const field of schema) {
             if (field.if) {
-              const result = evaluate(field.if);
-              const previous = conditionalFields[field.name];
-              if (previous !== result) {
-                change = true;
+              try {
+                const result = await self.evaluateCondition(
+                  req,
+                  field,
+                  field.if,
+                  destination,
+                  conditionalFields
+                );
+                const previous = conditionalFields[field.name];
+                if (previous !== result) {
+                  change = true;
+                }
+                conditionalFields[field.name] = result;
+              } catch (error) {
+                errors[field.name] = error;
               }
-              conditionalFields[field.name] = result;
             }
           }
+
+          // send the error related to the given field via the `name` param
+          if (errors[name]) {
+            throw errors[name];
+          }
+
           if (!change) {
             break;
           }
@@ -559,23 +857,33 @@ module.exports = {
         } else {
           return true;
         }
-        function evaluate(clause) {
-          let result = true;
-          for (const [ key, val ] of Object.entries(clause)) {
-            if (key === '$or') {
-              return val.some(clause => evaluate(clause));
-            }
-            if (conditionalFields[key] === false) {
-              result = false;
-              break;
-            }
-            if (val !== object[key]) {
-              result = false;
-              break;
-            }
-          }
-          return result;
+      },
+
+      async evaluateMethod(req, methodKey, fieldName, fieldModuleName, docId = null, optionalParenthesis = false, following = {}) {
+        const [ methodDefinition, rest ] = methodKey.split('(');
+        const hasParenthesis = rest !== undefined;
+
+        if (!hasParenthesis && !optionalParenthesis) {
+          throw new Error(`The method "${methodDefinition}" defined in the "${fieldName}" field should be written with parenthesis: "${methodDefinition}()".`);
         }
+        if (hasParenthesis && !methodKey.endsWith('()')) {
+          self.apos.util.warn(`The method "${methodDefinition}" defined in the "${fieldName}" field should be written without argument: "${methodDefinition}()".`);
+          methodKey = methodDefinition + '()';
+        }
+
+        const [ methodName, moduleName = fieldModuleName ] = methodDefinition
+          .split(':')
+          .reverse();
+
+        const module = self.apos.modules[moduleName];
+
+        if (!module) {
+          throw new Error(`The "${moduleName}" module defined in the "${fieldName}" field does not exist.`);
+        } else if (!module[methodName]) {
+          throw new Error(`The "${methodName}" method from "${moduleName}" module defined in the "${fieldName}" field does not exist.`);
+        }
+
+        return module[methodName](req, { docId }, following);
       },
 
       // Driver invoked by the "relationship" methods of the standard
@@ -661,9 +969,12 @@ module.exports = {
         let relationships = [];
 
         function findRelationships(schema, arrays) {
+          // Shallow clone of each relationship to allow
+          // for independent _dotPath and _arrays properties
+          // for different requests
           const _relationships = _.filter(schema, function (field) {
             return !!self.fieldTypes[field.type].relate;
-          });
+          }).map(relationship => ({ ...relationship }));
           _.each(_relationships, function (relationship) {
             if (!arrays.length) {
               relationship._dotPath = relationship.name;
@@ -746,7 +1057,7 @@ module.exports = {
               const find = manager.find;
 
               const options = {
-                find: find,
+                find,
                 builders: { relationships: withRelationshipsNext[relationship._dotPath] || false }
               };
               const subname = relationship.name + ':' + type;
@@ -781,7 +1092,10 @@ module.exports = {
               _.each(_objects, function (object) {
                 if (object[relationship.name]) {
                   const locale = `${req.locale}:${req.mode}`;
-                  object[relationship.name] = self.apos.util.orderById(object[relationship.idsStorage].map(id => `${id}:${locale}`), object[relationship.name]);
+                  object[relationship.name] = self.apos.util.orderById(
+                    object[relationship.idsStorage].map(id => `${id}:${locale}`),
+                    object[relationship.name]
+                  );
                 }
               });
             }
@@ -796,7 +1110,7 @@ module.exports = {
           const find = manager.find;
 
           const options = {
-            find: find,
+            find,
             builders: { relationships: withRelationshipsNext[relationship._dotPath] || false }
           };
 
@@ -804,6 +1118,19 @@ module.exports = {
           // specified in the relationship configuration
           if (relationship.builders) {
             _.extend(options.builders, relationship.builders);
+          }
+
+          // If there is a projection for a reverse relationship, make sure it includes
+          // the idsStorage and fieldsStorage for the relationship, otherwise no related
+          // documents will be returned. Make sure the projection is positive, not negative,
+          // before attempting to add more positive assertions to it
+          if ((relationship.type === 'relationshipReverse') && options.builders.project && Object.values(options.builders.project).some(v => !!v)) {
+            if (relationship.idsStorage) {
+              options.builders.project[relationship.idsStorage] = 1;
+            }
+            if (relationship.fieldsStorage) {
+              options.builders.project[relationship.fieldsStorage] = 1;
+            }
           }
 
           // Allow options to the getter to be specified in the schema
@@ -849,18 +1176,39 @@ module.exports = {
       //
       // Currently `req` does not impact this, but that may change.
 
-      prepareForStorage(req, doc) {
+      prepareForStorage(req, doc, options = {}) {
+        const can = (field) => {
+          return options.permissions === false ||
+            (!field.withType && !field.editPermission && !field.viewPermission) ||
+            (field.withType && self.apos.permission.can(req, 'view', field.withType)) ||
+            (field.editPermission && self.apos.permission.can(req, field.editPermission.action, field.editPermission.type)) ||
+            (field.viewPermission && self.apos.permission.can(req, field.viewPermission.action, field.viewPermission.type)) ||
+            false;
+        };
+
         const handlers = {
           arrayItem: (field, object) => {
+            if (!object || !can(field)) {
+              return;
+            }
+
             object._id = object._id || self.apos.util.generateId();
             object.metaType = 'arrayItem';
             object.scopedArrayName = field.scopedArrayName;
           },
           object: (field, object) => {
+            if (!object || !can(field)) {
+              return;
+            }
+
             object.metaType = 'object';
             object.scopedObjectName = field.scopedObjectName;
           },
           relationship: (field, doc) => {
+            if (!Array.isArray(doc[field.name]) || !can(field)) {
+              return;
+            }
+
             doc[field.idsStorage] = doc[field.name].map(relatedDoc => self.apos.doc.toAposDocId(relatedDoc));
             if (field.fieldsStorage) {
               const fieldsById = doc[field.fieldsStorage] || {};
@@ -871,6 +1219,25 @@ module.exports = {
               }
               doc[field.fieldsStorage] = fieldsById;
             }
+          }
+        };
+
+        self.apos.doc.walkByMetaType(doc, handlers);
+      },
+
+      simulateRelationshipsFromStorage(req, doc) {
+        const handlers = {
+          relationship: (field, object) => {
+            const manager = self.apos.doc.getManager(field.withType);
+            const setId = (id) => manager.options.localized !== false
+              ? `${id}:${doc.aposLocale}`
+              : id;
+
+            const itemIds = object[field.idsStorage] || [];
+            object[field.name] = itemIds.map(id => ({
+              _id: setId(id),
+              _fields: object[field.fieldsStorage]?.[id] || {}
+            }));
           }
         };
 
@@ -956,6 +1323,13 @@ module.exports = {
         return self.fieldTypes[typeName];
       },
 
+      addFieldMetadataComponent(namespace, component) {
+        self.fieldMetadataComponents.push({
+          name: component,
+          namespace
+        });
+      },
+
       // Given a schema and a query, add query builders to the query
       // for each of the fields in the schema, based on their field type,
       // if supported by the field type. If the field already has a
@@ -984,7 +1358,7 @@ module.exports = {
           const idsStorage = field.idsStorage;
           const ids = await query.toDistinct(idsStorage);
           const manager = self.apos.doc.getManager(field.withType);
-          const relationshipQuery = manager.find(query.req, { aposDocId: { $in: ids } }).project(manager.getAutocompleteProjection({ field: field }));
+          const relationshipQuery = manager.find(query.req, { aposDocId: { $in: ids } }).project(manager.getRelationshipQueryBuilderChoicesProjection({ field }));
           if (field.builders) {
             relationshipQuery.applyBuilders(field.builders);
           }
@@ -1097,19 +1471,23 @@ module.exports = {
       // reasonable values for certain properties, such as the `idsStorage` property
       // of a `relationship` field, or the `label` property of anything.
 
-      validate(schema, options) {
+      validate(schema, options, parent = null) {
         schema.forEach(field => {
           // Infinite recursion prevention
           const key = `${options.type}:${options.subtype}.${field.name}`;
           if (!self.validatedSchemas[key]) {
             self.validatedSchemas[key] = true;
-            self.validateField(field, options);
+            self.validateField(field, options, parent);
           }
         });
       },
 
       // Validates a single schema field. See `validate`.
-      validateField(field, options) {
+      validateField(field, options, parent = null) {
+        field.aposPath = parent
+          ? `${parent.aposPath}/${field.name}`
+          : field.name;
+
         const fieldType = self.fieldTypes[field.type];
         if (!fieldType) {
           fail('Unknown schema field type.');
@@ -1120,12 +1498,30 @@ module.exports = {
         if (!field.label && !field.contextual) {
           field.label = _.startCase(field.name.replace(/^_/, ''));
         }
+        if (field.hidden && field.hidden !== true && field.hidden !== false) {
+          fail(`hidden must be a boolean, "${field.hidden}" provided.`);
+        }
         if (field.if && field.if.$or && !Array.isArray(field.if.$or)) {
           fail(`$or conditional must be an array of conditions. Current $or configuration: ${JSON.stringify(field.if.$or)}`);
+        }
+        if (field.requiredIf && field.requiredIf.$or && !Array.isArray(field.requiredIf.$or)) {
+          fail(`$or conditional must be an array of conditions. Current $or configuration: ${JSON.stringify(field.requiredIf.$or)}`);
+        }
+        if (!field.editPermission && field.permission) {
+          field.editPermission = field.permission;
+        }
+        if (options.type !== 'doc type' && (field.editPermission || field.viewPermission)) {
+          warn(`editPermission or viewPermission must be defined on doc-type schemas only, "${options.type}" provided`);
+        }
+        if (options.type === 'doc type' && (field.editPermission || field.viewPermission) && parent) {
+          warn(`editPermission or viewPermission must be defined on root fields only, provided on "${parent.name}.${field.name}"`);
         }
         if (fieldType.validate) {
           fieldType.validate(field, options, warn, fail);
         }
+        // Ancestors hoisting should happen AFTER the validation recursion,
+        // so that ancestors are processed as well.
+        self.hoistFollowingFieldsToParent(field, parent);
         function fail(s) {
           throw new Error(format(s));
         }
@@ -1133,13 +1529,39 @@ module.exports = {
           self.apos.util.error(format(s));
         }
         function format(s) {
+          const fieldName = parent && parent.name
+            ? `${parent.name}.${field.name}`
+            : field.name;
+
           return stripIndents`
-            ${options.type} ${options.subtype}, ${field.type} field "${field.name}":
+            ${options.type} ${options.subtype}, ${field.type} field "${fieldName}":
 
             ${s}
 
           `;
         }
+      },
+
+      // If a field has a following property and a parent,
+      // hoist that property values to the parent,
+      // if they start with `<`.
+      hoistFollowingFieldsToParent(field, parent) {
+        if (!parent || !field.following) {
+          return;
+        }
+        const following = typeof field.following === 'string'
+          ? [ field.following ]
+          : field.following;
+        const parentFollowing = typeof parent.following === 'string'
+          ? [ parent.following ]
+          : parent.following;
+        const hoistFollowing = following
+          .filter(f => f.startsWith('<'))
+          .map(f => f.slice(1));
+        parent.following = _.uniq([
+          ...(parentFollowing || []),
+          ...hoistFollowing
+        ]);
       },
 
       // Recursively register the given schema, giving each field an _id and making provision to be able to
@@ -1415,15 +1837,18 @@ module.exports = {
         for (const field of schema) {
           if (field.type === 'array') {
             for (const item of (doc[field.name] || [])) {
+              item._originalId = item._id;
               item._id = self.apos.util.generateId();
               self.regenerateIds(req, field.schema, item);
             }
           } else if (field.type === 'object') {
-            this.regenerateIds(req, field.schema, doc[field.name] || {});
+            self.regenerateIds(req, field.schema, doc[field.name] || {});
           } else if (field.type === 'area') {
             if (doc[field.name]) {
+              doc[field.name]._originalId = doc[field.name]._id;
               doc[field.name]._id = self.apos.util.generateId();
               for (const item of (doc[field.name].items || [])) {
+                item._originalId = item._id;
                 item._id = self.apos.util.generateId();
                 const schema = self.apos.area.getWidgetManager(item.type).schema;
                 self.regenerateIds(req, schema, item);
@@ -1451,18 +1876,229 @@ module.exports = {
       },
 
       registerAllSchemas() {
-        _.each(self.apos.doc.managers, function (manager, type) {
-          self.register('doc', type, manager.schema);
+        self.schemaPointers = {};
+        registerMetaType(self.apos.doc.managers, 'doc');
+        registerMetaType(self.apos.area.widgetManagers, 'widget');
+        function registerMetaType(managers, metaType) {
+          for (const [ type, manager ] of Object.entries(managers)) {
+            const schema = manager.schema;
+            self.register(metaType, type, schema);
+            const pointer = {
+              parent: null,
+              fieldIdsByName: getFieldIdsByName(schema)
+            };
+            for (const field of schema) {
+              setSchemaPointers(pointer, field);
+            }
+          }
+        }
+        function setSchemaPointers(parent, field) {
+          const pointer = {
+            parent
+          };
+          if (field.schema) {
+            pointer.fieldIdsByName = getFieldIdsByName(field.schema);
+            for (const child of field.schema) {
+              setSchemaPointers(pointer, child);
+            }
+          }
+          self.schemaPointers[field._id] = pointer;
+        }
+        function getFieldIdsByName(schema) {
+          const idsByName = {};
+          for (const field of schema) {
+            idsByName[field.name] = field._id;
+          }
+          return idsByName;
+        }
+      },
+
+      // resolves paths such as:
+      // 'siblingname'
+      // '<fieldofparentname'
+      // '<<fieldofgrandparentname'
+      //
+      // Throws an 'invalid' exception if id is not a
+      // valid field id, the field does not list the path
+      // in its 'following' property or relativePath does
+      // not point to a valid field
+
+      getFieldByRelativePath(id, relativePath) {
+        const field = self.apos.schema.getFieldById(id);
+        if (!field) {
+          throw self.apos.error('invalid', 'no such field id');
+        }
+        if (!(field.following || []).includes(relativePath)) {
+          throw self.apos.error('invalid', `${relativePath} does not appear in "following" for this field`);
+        }
+        let pointer = self.schemaPointers[field._id];
+        if (!pointer) {
+          // Should not be possible
+          throw self.apos.error('error', 'schema pointer not found even though field id is valid');
+        }
+        let path = relativePath;
+        // We are at the field level, first step to our own parent, which is a schema,
+        // so that a path like "peername" works
+        pointer = pointer.parent;
+        // Now deal with any ancestor paths
+        while (path.startsWith('<')) {
+          pointer = pointer.parent;
+          if (!pointer) {
+            throw self.apos.error('invalid', `${path} (${relativePath}) points above the schema tree`);
+          }
+          path = path.substring(1);
+        }
+        const relatedId = pointer.fieldIdsByName[path];
+        if (!relatedId) {
+          throw self.apos.error('invalid', `${path} (${relativePath}) is not a valid field in the schema tree`);
+        }
+        const relatedField = self.getFieldById(relatedId);
+        if (!relatedField) {
+          throw self.apos.error('error', `${path} (${relativePath}) resolves to a field id but getFieldById somehow does not return a field`);
+        }
+        return relatedField;
+      },
+
+      async getChoicesForQueryBuilder(field, query) {
+        const req = self.apos.task.getReq();
+        const allChoices = await self.getChoices(req, field);
+        const values = await query.toDistinct(field.name);
+
+        const choices = _.map(values, function (value) {
+          const choice = _.find(allChoices, { value });
+          return {
+            value,
+            label: choice && (choice.label || value)
+          };
         });
-        _.each(self.apos.area.widgetManagers, function (manager, type) {
-          self.register('widget', type, manager.schema);
+
+        self.apos.util.insensitiveSortByProperty(choices, 'label');
+
+        return choices;
+      },
+
+      async getChoices(req, field, contexts = []) {
+        if (typeof field.choices !== 'string') {
+          return field.choices;
+        }
+
+        try {
+          const following = {};
+          for (const follows of field.following || []) {
+            let level = contexts.length - 1;
+            let path = follows;
+            while (true) {
+              if (level < 0) {
+                throw self.apos.error('invalid', `${follows} is not a valid path in ${field.name}`);
+              }
+              if (!path.startsWith('<')) {
+                following[follows] = contexts[level][path];
+                break;
+              }
+              path = path.substring(1);
+              level--;
+            }
+          }
+          const result = await self.evaluateMethod(req, field.choices, field.name, field.moduleName, null, true, following);
+          return result;
+        } catch (error) {
+          throw self.apos.error('invalid', error.message);
+        }
+      },
+
+      getSlugFieldOptions(field, data) {
+        const options = {
+          def: field.def
+        };
+        if (field.page) {
+          options.allow = '/';
+        }
+        return options;
+      },
+
+      // Register a Vue component as custom indicator in the UI manager.
+      // The component should be already exist in the admin UI
+      // (created in `ui/apos/components`).
+      // Properties:
+      // - `component`: the name of the Vue component
+      // - `props`: (optional, object) additional props to pass to the component.
+      // - `if`: (optional, object) a standard Apostrophe condition to show/hide
+      //    the indicator. Keep in mind the component can also decide internally
+      //    to show/hide itself. The condition is evaluated against the draft doc.
+      //    The keys represent field names and support dot notation.
+      //
+      // Example:
+      // ```javascript
+      // self.apos.schema.addManagerIndicator({
+      //   component: 'MyCustomIndicator',
+      //   props: {
+      //     label: 'My indicator'
+      //   },
+      //   if: {
+      //     type: 'my-type',
+      //     'myField': 'my-value',
+      //     'myObject.field': 'my-nested-value'
+      //   }
+      // });
+      addManagerIndicator({
+        component, props, if: condition
+      }) {
+        self.uiManagerIndicators.push({
+          component,
+          props,
+          if: condition
         });
       },
 
-      async getChoices(req, field) {
-        return typeof field.choices === 'string'
-          ? self.apos.modules[field.moduleName][field.choices](req)
-          : field.choices;
+      async choicesRoute(req) {
+        const fieldId = self.apos.launder.string(req.query.fieldId);
+        const docId = self.apos.launder.string(req.query.docId);
+        const followingData = req.body?.following || {};
+        const following = {};
+        const field = self.getFieldById(fieldId);
+        let choices = [];
+        if (
+          !field ||
+          !self.fieldTypes[field.type].dynamicChoices ||
+          !(field.choices && typeof field.choices === 'string')
+        ) {
+          throw self.apos.error('invalid');
+        }
+        if (field.following) {
+          for (const follows of field.following) {
+            const relatedField = self.getFieldByRelativePath(field._id, follows);
+            relatedField.if = undefined;
+            relatedField.requiredIf = undefined;
+            const subset = [ relatedField ];
+            const source = {
+              [relatedField.name]: followingData && followingData[follows]
+            };
+            const output = {};
+            try {
+              await self.convert(req, subset, source, output);
+              following[follows] = output[relatedField.name];
+            } catch (e) {
+              self.apos.util.debug(e);
+              // the fields we are following are not yet in a valid state
+              // (if they ever will be), so no choices offered yet
+              return {
+                choices: []
+              };
+            }
+          }
+        }
+        try {
+          choices = await self.evaluateMethod(req, field.choices, field.name, field.moduleName, docId, true, following);
+        } catch (error) {
+          throw self.apos.error('invalid', error.message);
+        }
+        if (Array.isArray(choices)) {
+          return {
+            choices
+          };
+        } else {
+          throw self.apos.error('invalid', `The method ${field.choices} from the module ${field.moduleName} did not return an array`);
+        }
       }
 
     };
@@ -1471,24 +2107,30 @@ module.exports = {
     return {
       get: {
         async choices(req) {
-          const id = self.apos.launder.string(req.query.fieldId);
-          const field = self.getFieldById(id);
-          let choices = [];
-          if (
-            !field ||
-            !self.fieldTypes[field.type].dynamicChoices ||
-            !(field.choices && typeof field.choices === 'string')
-          ) {
-            throw self.apos.error('invalid');
+          return self.choicesRoute(req);
+        },
+        async evaluateExternalCondition(req) {
+          const fieldId = self.apos.launder.string(req.query.fieldId);
+          const docId = self.apos.launder.string(req.query.docId, null);
+          const conditionKey = self.apos.launder.string(req.query.conditionKey);
+
+          const field = self.getFieldById(fieldId);
+          const allowedKeys = getFieldExternalConditionKeys(field);
+          // We must tolerate arguments at this stage as we only warn about them later
+          if (!allowedKeys.includes(conditionKey.replace(/\(.*\)/, '()'))) {
+            throw self.apos.error('forbidden', `${conditionKey} is not registered as an external condition.`);
           }
-          choices = await self.apos.modules[field.moduleName][field.choices](req);
-          if (Array.isArray(choices)) {
-            return {
-              choices
-            };
-          } else {
-            throw self.apos.error('invalid', `The method ${field.choices} from the module ${field.moduleName} did not return an array`);
+          try {
+            const result = await self.evaluateMethod(req, conditionKey, field.name, field.moduleName, docId);
+            return { result };
+          } catch (error) {
+            throw self.apos.error('invalid', error.message);
           }
+        }
+      },
+      post: {
+        async choices(req) {
+          return self.choicesRoute(req);
         }
       }
     };
@@ -1508,9 +2150,35 @@ module.exports = {
           fields[name] = component;
         }
         browserOptions.action = self.action;
-        browserOptions.components = { fields: fields };
+        browserOptions.components = { fields };
+        browserOptions.fieldMetadataComponents = self.fieldMetadataComponents;
+        browserOptions.customCellIndicators = self.uiManagerIndicators;
         return browserOptions;
       }
     };
   }
 };
+
+function getFieldExternalConditionKeys(field) {
+  const conditionTypes = [ 'if', 'requiredIf' ];
+  return [
+    ...new Set(conditionTypes.map(conditionType => getConditionTypeExternalConditionKeys(field[conditionType] || {})).flat())
+  ];
+}
+
+function getConditionTypeExternalConditionKeys(conditions) {
+  let results = [];
+  if (conditions.$or) {
+    results = conditions.$or.map(getConditionTypeExternalConditionKeys).flat();
+  }
+  for (const key of Object.keys(conditions)) {
+    if (key === '$or') {
+      results = [ ...results, conditions.$or.map(getConditionTypeExternalConditionKeys).flat() ];
+    } else {
+      if (key.endsWith('()')) {
+        results.push(key);
+      }
+    }
+  }
+  return results;
+}

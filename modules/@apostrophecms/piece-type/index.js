@@ -26,17 +26,39 @@ module.exports = {
     // publicApiProjection: {
     //   title: 1,
     //   _url: 1,
+    // },
+    // By default the manager modal will get all the pieces fields below + all manager columns
+    // you can enable a projection using
+    // managerApiProjection: {
+    //   _id: 1,
+    //   _url: 1,
+    //   aposDocId: 1,
+    //   aposLocale: 1,
+    //   aposMode: 1,
+    //   docPermissions: 1,
+    //   slug: 1,
+    //   title: 1,
+    //   type: 1,
+    //   visibility: 1
     // }
   },
-  fields: {
-    add: {
-      slug: {
-        type: 'slug',
-        label: 'apostrophe:slug',
-        following: [ 'title', 'archived' ],
-        required: true
-      }
-    }
+  fields(self) {
+    return {
+      add: {
+        slug: {
+          type: 'slug',
+          label: 'apostrophe:slug',
+          following: [ 'title', 'archived' ],
+          required: true
+        }
+      },
+      remove: self.options.singletonAuto ? [
+        'title',
+        'slug',
+        'archived',
+        'visibility'
+      ] : []
+    };
   },
   columns(self) {
     return {
@@ -102,14 +124,45 @@ module.exports = {
       }
     }
   },
-  utilityOperations: {},
+  utilityOperations(self) {
+    return {
+      add: {
+        new: {
+          canCreate: true,
+          relationship: true,
+          label: {
+            key: 'apostrophe:newDocType',
+            type: `$t(${self.options.label})`
+          },
+          eventOptions: {
+            event: 'edit',
+            type: self.__meta.name
+          }
+        }
+      }
+    };
+  },
   batchOperations: {
     add: {
+      publish: {
+        label: 'apostrophe:publish',
+        messages: {
+          progress: 'apostrophe:batchPublishProgress',
+          completed: 'apostrophe:batchPublishCompleted'
+        },
+        icon: 'earth-icon',
+        modalOptions: {
+          title: 'apostrophe:publishType',
+          description: 'apostrophe:publishingBatchConfirmation',
+          confirmationButton: 'apostrophe:publishingBatchConfirmationButton'
+        },
+        permission: 'publish'
+      },
       archive: {
         label: 'apostrophe:archive',
         messages: {
-          progress: 'Archiving {{ type }}...',
-          completed: 'Archived {{ count }} {{ type }}.'
+          progress: 'apostrophe:batchArchiveProgress',
+          completed: 'apostrophe:batchArchiveCompleted'
         },
         icon: 'archive-arrow-down-icon',
         if: {
@@ -119,13 +172,14 @@ module.exports = {
           title: 'apostrophe:archiveType',
           description: 'apostrophe:archivingBatchConfirmation',
           confirmationButton: 'apostrophe:archivingBatchConfirmationButton'
-        }
+        },
+        permission: 'delete'
       },
       restore: {
         label: 'apostrophe:restore',
         messages: {
-          progress: 'Restoring {{ type }}...',
-          completed: 'Restoring {{ count }} {{ type }}.'
+          progress: 'apostrophe:batchRestoreProgress',
+          completed: 'apostrophe:batchRestoreCompleted'
         },
         icon: 'archive-arrow-up-icon',
         if: {
@@ -135,19 +189,38 @@ module.exports = {
           title: 'apostrophe:restoreType',
           description: 'apostrophe:restoreBatchConfirmation',
           confirmationButton: 'apostrophe:restoreBatchConfirmationButton'
-        }
+        },
+        permission: 'edit'
+      },
+      localize: {
+        label: 'apostrophe:localize',
+        messages: {
+          icon: 'translate-icon',
+          progress: 'apostrophe:localizingBatch',
+          completed: 'apostrophe:localizedBatch',
+          resultsEventName: 'apos-localize-batch-results'
+        },
+        if: {
+          archived: false
+        },
+        modal: 'AposI18nLocalize',
+        permission: 'edit'
       }
     },
     group: {
       more: {
         icon: 'dots-vertical-icon',
-        operations: []
+        operations: [ 'localize' ]
       }
     }
   },
   init(self) {
     if (!self.options.name) {
       throw new Error('@apostrophecms/pieces require name option');
+    }
+    const badFieldName = Object.keys(self.fields).indexOf('type') !== -1;
+    if (badFieldName) {
+      throw new Error(`The ${self.__meta.name} module contains a forbidden field property name: "type".`);
     }
     if (!self.options.label) {
       // Englishify it
@@ -173,7 +246,7 @@ module.exports = {
       getAll: [
         ...enableCacheOnDemand ? [ expressCacheOnDemand ] : [],
         async (req) => {
-          self.publicApiCheck(req);
+          await self.publicApiCheckAsync(req);
           const query = self.getRestQuery(req);
           if (!query.get('perPage')) {
             query.perPage(
@@ -190,9 +263,14 @@ module.exports = {
           }
           result.pages = query.get('totalPages');
           result.currentPage = query.get('page') || 1;
-          result.results = await query.toArray();
-          if (self.apos.launder.boolean(req.query['render-areas']) === true) {
-            await self.apos.area.renderDocsAreas(req, result.results);
+          result.results = (await query.toArray())
+            .map(doc => self.removeForbiddenFields(req, doc));
+          const renderAreas = req.query['render-areas'];
+          const inline = renderAreas === 'inline';
+          if (inline || self.apos.launder.boolean(renderAreas)) {
+            await self.apos.area.renderDocsAreas(req, result.results, {
+              inline
+            });
           }
           if (query.get('choicesResults')) {
             result.choices = query.get('choicesResults');
@@ -212,8 +290,11 @@ module.exports = {
         ...enableCacheOnDemand ? [ expressCacheOnDemand ] : [],
         async (req, _id) => {
           _id = self.inferIdLocaleAndMode(req, _id);
-          self.publicApiCheck(req);
-          const doc = await self.getRestQuery(req).and({ _id }).toObject();
+          await self.publicApiCheckAsync(req);
+          const doc = self.removeForbiddenFields(
+            req,
+            await self.getRestQuery(req).and({ _id }).toObject()
+          );
 
           if (self.options.cache && self.options.cache.api && self.options.cache.api.maxAge) {
             const { maxAge } = self.options.cache.api;
@@ -228,17 +309,25 @@ module.exports = {
           if (!doc) {
             throw self.apos.error('notfound');
           }
-          if (self.apos.launder.boolean(req.query['render-areas']) === true) {
-            await self.apos.area.renderDocsAreas(req, [ doc ]);
+          const renderAreas = req.query['render-areas'];
+          const inline = renderAreas === 'inline';
+          if (inline || self.apos.launder.boolean(renderAreas)) {
+            await self.apos.area.renderDocsAreas(req, [ doc ], {
+              inline
+            });
           }
           self.apos.attachment.all(doc, { annotate: true });
           return doc;
         }
       ],
       async post(req) {
-        self.publicApiCheck(req);
+        await self.publicApiCheckAsync(req);
         if (req.body._newInstance) {
-          const newInstance = self.newInstance();
+          const { _newInstance, ...body } = req.body;
+          const newInstance = {
+            ...self.newInstance(),
+            ...body
+          };
           newInstance._previewable = self.addUrlsViaModule && (await self.addUrlsViaModule.readyToAddUrlsToPieces(req, self.name));
           delete newInstance._url;
           return newInstance;
@@ -247,12 +336,12 @@ module.exports = {
       },
       async put(req, _id) {
         _id = self.inferIdLocaleAndMode(req, _id);
-        self.publicApiCheck(req);
+        await self.publicApiCheckAsync(req);
         return self.convertUpdateAndRefresh(req, req.body, _id);
       },
       async delete(req, _id) {
         _id = self.inferIdLocaleAndMode(req, _id);
-        self.publicApiCheck(req);
+        await self.publicApiCheckAsync(req);
         const piece = await self.findOneForEditing(req, {
           _id
         });
@@ -260,7 +349,7 @@ module.exports = {
       },
       async patch(req, _id) {
         _id = self.inferIdLocaleAndMode(req, _id);
-        self.publicApiCheck(req);
+        await self.publicApiCheckAsync(req);
         return self.convertPatchAndRefresh(req, req.body, _id);
       }
     };
@@ -294,6 +383,31 @@ module.exports = {
             throw self.apos.error('invalid');
           }
           return self.publish(req, draft);
+        },
+        async publish (req) {
+          if (!Array.isArray(req.body._ids)) {
+            throw self.apos.error('invalid');
+          }
+
+          req.body._ids = req.body._ids.map(_id => {
+            return self.inferIdLocaleAndMode(req, _id);
+          });
+
+          return self.apos.modules['@apostrophecms/job'].runBatch(
+            req,
+            req.body._ids,
+            async function(req, id) {
+              const piece = await self.findOneForEditing(req, { _id: id });
+
+              if (!piece) {
+                throw self.apos.error('notfound');
+              }
+
+              await self.publish(req, piece);
+            }, {
+              action: 'publish'
+            }
+          );
         },
         async archive (req) {
           if (!Array.isArray(req.body._ids)) {
@@ -347,9 +461,26 @@ module.exports = {
             }
           );
         },
+        localize(req) {
+          if (!Array.isArray(req.body._ids)) {
+            throw self.apos.error('invalid');
+          }
+          if (!Array.isArray(req.body.toLocales)) {
+            throw self.apos.error('invalid');
+          }
+          req.body.type = req.body._ids.length === 1
+            ? self.options.label
+            : self.options.pluralLabel;
+
+          return self.apos.modules['@apostrophecms/job'].run(
+            req,
+            (req, reporting) => self.apos.modules['@apostrophecms/i18n']
+              .localizeBatch(req, self, reporting)
+          );
+        },
         ':_id/localize': async (req) => {
           const _id = self.inferIdLocaleAndMode(req, req.params._id);
-          const draft = await self.findOneForEditing(req.clone({
+          const draft = await self.findOneForLocalizing(req.clone({
             mode: 'draft'
           }), {
             aposDocId: _id.split(':')[0]
@@ -526,7 +657,7 @@ module.exports = {
 
             // Return the operation group with the new operation added.
             return {
-              name: groupName,
+              action: groupName,
               ...groupProperties,
               operations: [
                 ...(acc[groupName] && acc[groupName].operations) || [],
@@ -573,16 +704,28 @@ module.exports = {
           ...options,
           setModified: false
         };
-        const inserted = await self.insert(req.clone({
-          mode: 'draft'
-        }), draft, options);
+        const inserted = await self.insert(
+          req.clone({ mode: 'draft' }),
+          draft,
+          options
+        );
         return inserted;
       },
       // Similar to insertDraftOf, invoked on first publication.
       insertPublishedOf(req, doc, published, options) {
-        return self.insert(req.clone({
-          mode: 'published'
-        }), published, options);
+        // Check publish permission up front because we won't check it
+        // in insert
+        if (!self.apos.permission.can(req, 'publish', doc)) {
+          throw self.apos.error('forbidden');
+        }
+        return self.insert(
+          req.clone({ mode: 'published' }),
+          published,
+          {
+            ...options,
+            permissions: false
+          }
+        );
       },
       // Returns one editable piece matching the criteria, throws `notfound`
       // if none match
@@ -610,39 +753,6 @@ module.exports = {
       // True delete
       async delete(req, piece, options = {}) {
         return self.apos.doc.delete(req, piece, options);
-      },
-      composeFilters() {
-        self.filters = Object.keys(self.filters).map(key => ({
-          name: key,
-          ...self.filters[key],
-          inputType: self.filters[key].inputType || 'select'
-        }));
-        // Add a null choice if not already added or set to `required`
-        self.filters.forEach(filter => {
-          if (filter.choices) {
-            if (
-              !filter.required &&
-              filter.choices &&
-              !filter.choices.find(choice => choice.value === null)
-            ) {
-              filter.def = null;
-              filter.choices.push({
-                value: null,
-                label: 'apostrophe:none'
-              });
-            }
-          } else {
-            // Dynamic choices from the REST API, but
-            // we need a label for "no opinion"
-            filter.nullLabel = 'Choose One';
-          }
-        });
-      },
-      composeColumns() {
-        self.columns = Object.keys(self.columns).map(key => ({
-          name: key,
-          ...self.columns[key]
-        }));
       },
       // Enable inclusion of this type in sitewide search results
       searchDetermineTypes(types) {
@@ -749,13 +859,21 @@ module.exports = {
       async convertInsertAndRefresh(req, input, options) {
         const piece = self.newInstance();
         const copyingId = self.apos.launder.id(input._copyingId);
+        const createId = self.apos.launder.id(input._createId);
         await self.convert(req, input, piece, {
-          onlyPresentFields: true,
-          copyingId
+          copyingId,
+          createId
         });
         await self.emit('afterConvert', req, input, piece);
         await self.insert(req, piece);
-        return self.findOneForEditing(req, { _id: piece._id }, { attachments: true });
+        return self.findOneForEditing(
+          req,
+          { _id: piece._id },
+          {
+            attachments: true,
+            permission: 'create'
+          }
+        );
       },
 
       // Similar to `convertInsertAndRefresh`. Update the piece with the given _id, based on the
@@ -789,7 +907,7 @@ module.exports = {
           let tabId = null;
           let lock = false;
           let force = false;
-          if (input._advisoryLock && ((typeof input._advisoryLock) === 'object')) {
+          if (input._advisoryLock && typeof input._advisoryLock === 'object') {
             tabId = self.apos.launder.string(input._advisoryLock.tabId);
             lock = self.apos.launder.boolean(input._advisoryLock.lock);
             force = self.apos.launder.boolean(input._advisoryLock.force);
@@ -856,14 +974,19 @@ module.exports = {
           if (!piece) {
             throw self.apos.error('notfound');
           }
-          const patches = Array.isArray(input._patches) ? input._patches : [ input ];
+          const patches = Array.isArray(input._patches)
+            ? input._patches
+            : [ input ];
           // Conventional for loop so we can handle the last one specially
-          for (let i = 0; (i < patches.length); i++) {
+          for (let i = 0; i < patches.length; i++) {
             const input = patches[i];
             let tabId = null;
             let lock = false;
             let force = false;
-            if (input._advisoryLock && ((typeof input._advisoryLock) === 'object')) {
+            if (
+              input._advisoryLock &&
+              typeof input._advisoryLock === 'object'
+            ) {
               tabId = self.apos.launder.string(input._advisoryLock.tabId);
               lock = self.apos.launder.boolean(input._advisoryLock.lock);
               force = self.apos.launder.boolean(input._advisoryLock.force);
@@ -878,11 +1001,15 @@ module.exports = {
                 force: self.apos.launder.boolean(input._advisory)
               });
             }
-            if (i === (patches.length - 1)) {
+            if (i === patches.length - 1) {
               if (possiblePatchedFields) {
                 await self.update(req, piece);
               }
-              result = self.findOneForEditing(req, { _id }, { attachments: true });
+              result = self.findOneForEditing(
+                req,
+                { _id },
+                { attachments: true }
+              );
             }
             if (tabId && !lock) {
               await self.apos.doc.unlock(req, piece, tabId);
@@ -894,7 +1021,7 @@ module.exports = {
             return self.findOneForEditing(req, { _id }, { attachments: true });
           }
           if (self.apos.launder.boolean(input._publish)) {
-            if (self.options.localized && (!self.options.autopublish)) {
+            if (self.options.localized && !self.options.autopublish) {
               if (piece.aposLocale.includes(':draft')) {
                 await self.publish(req, piece, {});
               }
@@ -907,7 +1034,10 @@ module.exports = {
       // convertPatchAndRefresh, also used by the undo mechanism to simulate patches.
       async applyPatch(req, piece, input) {
         self.apos.schema.implementPatchOperators(input, piece);
-        const schema = self.apos.schema.subsetSchemaForPatch(self.allowedSchema(req), input);
+        const schema = self.apos.schema.subsetSchemaForPatch(
+          self.allowedSchema(req),
+          input
+        );
         await self.apos.schema.convert(req, schema, input, piece);
         await self.emit('afterConvert', req, input, piece);
       },
@@ -920,10 +1050,13 @@ module.exports = {
         piece.title = 'Generated #' + (i + 1);
         return piece;
       },
-      getRestQuery(req) {
+      // Can be extended on a project level with `_super(req, true)` to disable
+      // permission check and public API projection. You shouldn't do this
+      // if you're not sure what you're doing.
+      getRestQuery(req, omitPermissionCheck = false) {
         const query = self.find(req).attachments(true);
         query.applyBuildersSafely(req.query);
-        if (!self.apos.permission.can(req, 'view-draft')) {
+        if (!omitPermissionCheck && !self.canAccessApi(req)) {
           if (!self.options.publicApiProjection) {
             // Shouldn't be needed thanks to publicApiCheck, but be sure
             query.and({
@@ -945,10 +1078,15 @@ module.exports = {
       // we also want to flunk all public access to REST APIs if not specifically configured.
       publicApiCheck(req) {
         if (!self.options.publicApiProjection) {
-          if (!self.apos.permission.can(req, 'view-draft')) {
+          if (!self.canAccessApi(req)) {
             throw self.apos.error('notfound');
           }
         }
+      },
+      // An async version of the above. It can be overridden to implement
+      // an asynchronous check of the public API permissions.
+      async publicApiCheckAsync(req) {
+        return self.publicApiCheck(req);
       },
       // If the piece does not yet have a slug, add one based on the
       // title; throw an error if there is no title
@@ -957,8 +1095,72 @@ module.exports = {
           if (piece.title) {
             piece.slug = self.apos.util.slugify(piece.title);
           } else if (piece.slug !== 'none') {
-            throw self.apos.error('invalid', 'Document has neither slug nor title, giving up');
+            throw self.apos.error(
+              'invalid',
+              'Document has neither slug nor title, giving up'
+            );
           }
+        }
+      },
+      async flushInsertsAndDeletes(inserts, deletes, { force = false }) {
+        if (inserts.length > 100 || (force && inserts.length)) {
+          await self.apos.doc.db.insertMany(inserts);
+          inserts.splice(0);
+        }
+
+        if (deletes.length > 100 || (force && deletes.length)) {
+          await self.apos.doc.db.deleteMany({ _id: { $in: deletes } });
+          deletes.splice(0);
+        }
+      },
+      checkBatchOperationsPermissions(req) {
+        return self.batchOperations.filter(batchOperation => {
+          if (batchOperation.permission) {
+            return self.apos.permission.can(req, batchOperation.permission, self.name);
+          }
+
+          return true;
+        });
+      },
+      getManagerApiProjection(req) {
+        if (!self.options.managerApiProjection) {
+          return null;
+        }
+
+        const projection = { ...self.options.managerApiProjection };
+        self.columns.forEach(({ name }) => {
+          const column = (name.startsWith('draft:') || name.startsWith('published:'))
+            ? name.replace(/^(draft|published):/, '')
+            : name;
+
+          projection[column] = 1;
+        });
+
+        return projection;
+      },
+      async insertIfMissing() {
+        if (!self.options.singletonAuto) {
+          return;
+        }
+        // Insert at startup
+        const req = self.apos.task.getReq();
+        const criteria = {
+          type: self.name
+        };
+        if (self.options.localized) {
+          criteria.aposLocale = {
+            $in: Object.keys(self.apos.i18n.locales).map(locale => [ `${locale}:published`, `${locale}:draft` ]).flat()
+          };
+        }
+        const existing = await self.apos.doc.db.findOne(criteria, { _id: 1 });
+        if (!existing) {
+          const _new = {
+            ...self.newInstance(),
+            aposDocId: await self.apos.doc.bestAposDocId({
+              type: self.name
+            })
+          };
+          await self.insert(req, _new);
         }
       }
     };
@@ -970,29 +1172,45 @@ module.exports = {
         // Options specific to pieces and their manage modal
         browserOptions.filters = self.filters;
         browserOptions.columns = self.columns;
-        browserOptions.batchOperations = self.batchOperations;
+        browserOptions.batchOperations = self.checkBatchOperationsPermissions(req);
         browserOptions.utilityOperations = self.utilityOperations;
         browserOptions.insertViaUpload = self.options.insertViaUpload;
-        browserOptions.quickCreate = !self.options.singleton && self.options.quickCreate && self.apos.permission.can(req, 'edit', self.name, 'draft');
+        browserOptions.quickCreate = !self.options.singleton && self.options.quickCreate && browserOptions.canCreate;
         browserOptions.singleton = self.options.singleton;
-        browserOptions.showCreate = self.options.showCreate;
+        browserOptions.showCreate = !self.options.singleton && self.options.showCreate;
         browserOptions.showDismissSubmission = self.options.showDismissSubmission;
         browserOptions.showArchive = self.options.showArchive;
         browserOptions.showDiscardDraft = self.options.showDiscardDraft;
-        browserOptions.canEdit = self.apos.permission.can(req, 'edit', self.name, 'draft');
-        browserOptions.canPublish = self.apos.permission.can(req, 'edit', self.name, 'publish');
+        browserOptions.canDeleteDraft = self.apos.permission.can(req, 'delete', self.name, 'draft');
+        browserOptions.contentChangedRefresh = self.options.contentChangedRefresh !== false;
         _.defaults(browserOptions, {
           components: {}
         });
         _.defaults(browserOptions.components, {
-          editorModal: 'AposDocEditor',
-          managerModal: 'AposDocsManager'
+          editorModal: self.getComponentName('editorModal', 'AposDocEditor'),
+          managerModal: self.getComponentName('managerModal', 'AposDocsManager')
         });
+        browserOptions.managerApiProjection = self.getManagerApiProjection(req);
 
         return browserOptions;
       },
-      find(_super, req, criteria, projection) {
-        return _super(req, criteria, projection).defaultSort(self.options.sort || { updatedAt: -1 });
+      find(_super, req, criteria, options) {
+        return _super(req, criteria, options).defaultSort(self.options.sort || { updatedAt: -1 });
+      },
+      newInstance(_super) {
+        if (!self.options.singletonAuto) {
+          return _super();
+        }
+        const slug = self.apos.util.slugify(self.options.singletonAuto?.slug || self.name);
+        return {
+          ..._super(),
+          // These fields are removed from the editable schema of singletons,
+          // but we assign them directly for broader compatibility
+          slug,
+          title: slug,
+          archived: false,
+          visibility: 'public'
+        };
       }
     };
   },
@@ -1021,6 +1239,144 @@ module.exports = {
               aposSampleData: true
             });
           }
+        }
+      },
+
+      localize: {
+        usage: 'Add draft version documents for each locale when a module has the "localized" option.' +
+        '\nExample: node app [moduleName]:localize',
+        async task() {
+          if (!self.options.localized) {
+            throw new Error('Localized option not set to true, so the module cannot be localized.');
+          }
+
+          console.log('Adding drafts and locales to documents');
+
+          const locales = Object.keys(self.apos.i18n.locales);
+          const lastPublishedAt = new Date();
+          const inserts = [];
+          const deletes = [];
+
+          await self.apos.migration.eachDoc({ type: self.name }, async doc => {
+            if (doc.aposDocId && !doc._id.endsWith('published') && !doc._id.endsWith('draft')) {
+              deletes.push(doc._id);
+
+              for (const locale of locales) {
+                const newDraft = {
+                  ...doc,
+                  aposLocale: `${locale}:draft`,
+                  aposMode: 'draft',
+                  aposDocId: doc._id,
+                  _id: `${doc.aposDocId}:${locale}:draft`
+                };
+                const newPublished = {
+                  ...doc,
+                  aposLocale: `${locale}:published`,
+                  aposMode: 'published',
+                  aposDocId: doc._id,
+                  _id: `${doc.aposDocId}:${locale}:published`,
+                  lastPublishedAt
+                };
+                inserts.push(newDraft);
+                inserts.push(newPublished);
+
+                await self.flushInsertsAndDeletes(inserts, deletes);
+              }
+            }
+          });
+
+          await self.flushInsertsAndDeletes(inserts, deletes, { force: true });
+          await self.apos.attachment.recomputeAllDocReferences();
+
+          console.log(`Done localizing module ${self.name}`);
+        }
+      },
+
+      unlocalize: {
+        usage: 'Remove duplicate documents when a module has not "localized" and "autopublish" anymore.' +
+        '\nOptions are:' +
+        '\n- locale: if not set, it is the project\'s default locale' +
+        '\n- mode: by default, published' +
+        '\nExample: node app [moduleName]:unlocalize --mode=published --locale=en',
+        async task(argv) {
+          if (self.options.localized) {
+            throw new Error('Localized option not set to false, so the module cannot be unlocalized.');
+          }
+
+          const locale = argv.locale || self.apos.i18n.defaultLocale;
+          const mode = argv.mode || 'published';
+          const inserts = [];
+          const deletes = [];
+
+          console.log(`Removing duplicated documents and updating ${mode} ones`);
+
+          await self.apos.migration.eachDoc({ type: self.name }, async doc => {
+            deletes.push(doc._id);
+
+            if (doc.aposDocId && doc.aposLocale === `${locale}:${mode}` && doc.aposMode === mode) {
+              const newDoc = {
+                ...doc,
+                aposLocale: undefined,
+                aposMode: undefined,
+                _id: doc.aposDocId
+              };
+              inserts.push(newDoc);
+
+              await self.flushInsertsAndDeletes(inserts, deletes);
+            }
+          });
+
+          await self.flushInsertsAndDeletes(inserts, deletes, { force: true });
+          await self.apos.attachment.recomputeAllDocReferences();
+
+          console.log(`Done unlocalizing module ${self.name}`);
+        }
+      },
+
+      touch: {
+        usage: 'Invoke this task to touch (update without any change) all docs of this type.',
+        async task(argv) {
+          const req = self.apos.task.getAdminReq();
+          let errCount = 0;
+          let count = 0;
+          let cursor;
+          const criteria = self.options.autopublish
+            ? { aposMode: 'draft' }
+            : {};
+
+          try {
+            // We have 30 minutes (by default) for each iteration.
+            // https://www.mongodb.com/docs/manual/reference/method/cursor.noCursorTimeout/#session-idle-timeout-overrides-nocursortimeout
+            cursor = (await self.find(req, criteria)
+              .locale(null)
+              .limit(0)
+              .toMongo())
+              .addCursorFlag('noCursorTimeout', true);
+
+            for await (const doc of cursor) {
+              try {
+                await self.update(req, doc);
+                count++;
+              } catch (e) {
+                errCount++;
+                self.apos.util.error(e);
+              }
+            }
+          } catch (error) {
+            self.apos.util.error(error);
+          } finally {
+            if (cursor) {
+              await cursor.close();
+            }
+          }
+          console.log(`Touched ${count} doc(s) with ${errCount} error(s)`);
+
+          // Return, useful for tests and internal API's
+          // It's in effect only when invoked via apos.task.invoke().
+          return {
+            touched: count,
+            errors: errCount
+          };
         }
       }
     };

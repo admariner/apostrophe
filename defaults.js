@@ -1,8 +1,10 @@
 module.exports = {
   modules: {
+    '@apostrophecms/log': {},
     '@apostrophecms/error': {},
     '@apostrophecms/util': {},
     '@apostrophecms/i18n': {},
+    '@apostrophecms/multisite-i18n': {},
     '@apostrophecms/task': {},
     '@apostrophecms/schema': {},
     '@apostrophecms/uploadfs': {},
@@ -42,15 +44,19 @@ module.exports = {
     '@apostrophecms/rich-text-widget': {},
     '@apostrophecms/html-widget': {},
     '@apostrophecms/image-widget': {},
+    '@apostrophecms/color-field': {},
     '@apostrophecms/oembed-field': {},
     '@apostrophecms/video-widget': {},
     '@apostrophecms/ui': {},
     '@apostrophecms/user': {},
+    '@apostrophecms/settings': {},
     '@apostrophecms/image': {},
     '@apostrophecms/image-tag': {},
     '@apostrophecms/file': {},
     '@apostrophecms/file-tag': {},
     '@apostrophecms/soft-redirect': {},
-    '@apostrophecms/submitted-draft': {}
+    '@apostrophecms/submitted-draft': {},
+    '@apostrophecms/command-menu': {},
+    '@apostrophecms/translation': {}
   }
 };

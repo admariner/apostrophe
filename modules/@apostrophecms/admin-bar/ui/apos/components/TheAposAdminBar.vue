@@ -4,15 +4,30 @@
     class="apos-admin-bar-wrapper"
     :class="themeClass"
   >
-    <div class="apos-admin-bar-spacer" ref="spacer" />
-    <nav class="apos-admin-bar" ref="adminBar">
+    <div ref="spacer" class="apos-admin-bar-spacer" />
+    <nav
+      ref="adminBar"
+      class="apos-admin-bar"
+      role="menubar"
+      aria-label="Apostrophe Admin Bar"
+    >
       <div class="apos-admin-bar__row">
         <AposLogoPadless class="apos-admin-bar__logo" />
-        <TheAposAdminBarMenu :items="items" />
+        <TheAposAdminBarMenu :items="menuItems" />
         <TheAposAdminBarLocale v-if="hasLocales()" />
-        <TheAposAdminBarUser data-apos-test="authenticatedUserMenuTrigger" class="apos-admin-bar__user" />
+        <TheAposAdminBarUser
+          data-apos-test="authenticatedUserMenuTrigger"
+          class="apos-admin-bar__user"
+          :items="userItems"
+        />
       </div>
-      <TheAposContextBar @mounted="setSpacer" />
+      <TheAposContextBar @visibility-changed="setSpacer" />
+      <component
+        v-bind="bar.props || {}"
+        :is="bar.componentName"
+        v-for="bar in bars"
+        :key="bar.id"
+      />
     </nav>
   </div>
 </template>
@@ -26,12 +41,24 @@ export default {
   props: {
     items: {
       type: Array,
-      default: function () {
-        return [];
-      }
+      required: true
     }
   },
-  async mounted() {
+  computed: {
+    menuItems() {
+      return this.items.filter(item => !item.options?.user);
+    },
+    userItems() {
+      return this.items.filter(item => item.options?.user);
+    },
+    moduleOptions() {
+      return window.apos.adminBar;
+    },
+    bars() {
+      return this.moduleOptions.bars;
+    }
+  },
+  mounted() {
     this.setSpacer();
   },
   methods: {
@@ -62,11 +89,12 @@ export default {
   background: var(--a-background-primary);
 }
 
-::v-deep .apos-admin-bar__row {
+:deep(.apos-admin-bar__row) {
   display: flex;
   align-items: center;
-  height: 35px;
-  padding: 10px 20px;
+  height: 55px;
+  padding: 0 20px;
+  line-height: var(--a-line-base);
   border-bottom: 1px solid var(--a-base-9);
 }
 
@@ -76,47 +104,46 @@ export default {
   margin-right: 10px;
 }
 
-::v-deep .apos-admin-bar__control-set {
+:deep(.apos-admin-bar__control-set) {
   @include type-base;
-  display: flex;
-  width: 100%;
-  height: 100%;
+
+  & {
+    display: flex;
+    width: 100%;
+    height: 100%;
+  }
 }
 
 .apos-admin-bar__user {
   margin-left: auto;
 }
 
-::v-deep .apos-context-menu__pane {
-  min-width: 150px;
-}
-::v-deep .flip-enter { // to the ground
+:deep(.flip-enter) { // to the ground
   transform: translateY(-20%);
   opacity: 0;
 }
-::v-deep .flip-leave { // in the frame
+
+:deep(.flip-leave) { // in the frame
   transform: translateY(0);
   opacity: 1;
 }
-::v-deep .flip-enter-to { // from the ground
+
+:deep(.flip-enter-to) { // from the ground
   transform: translateY(0);
   opacity: 1;
 }
-::v-deep .flip-leave-to { // to the sky
+
+:deep(.flip-leave-to) { // to the sky
   transform: translateY(20%);
   opacity: 0;
 }
 
-::v-deep .flip-enter-active, ::v-deep .flip-leave-active {
-  transition: all 150ms;
+:deep(.flip-enter-active), :deep(.flip-leave-active) {
+  transition: all 200ms;
+
   &.apos-admin-bar__control-set__group {
     position: absolute;
   }
-}
-
-// make space for a widget's breadcrumbs that are flush with the admin bar
-.apos-admin-bar-spacer {
-  margin-bottom: 25px;
 }
 
 </style>
