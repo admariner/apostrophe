@@ -6,7 +6,6 @@
     @inactive="modal.active = false"
     @show-modal="modal.showModal = true"
     @esc="close"
-    @no-modal="$emit('safe-close')"
   >
     <template #main>
       <AposModalBody>
@@ -16,7 +15,7 @@
             :key="groupIndex"
             class="apos-widget-group"
           >
-            <h2 class="apos-widget-group__label" v-if="group.label">{{ group.label }}</h2>
+            <h2 v-if="group.label" class="apos-widget-group__label">{{ $t(group.label) }}</h2>
             <div
               :class="[
                 `apos-widget-group--${group.columns}-column${
@@ -24,9 +23,10 @@
                 }`
               ]"
             >
-              <div
+              <button
                 v-for="(item, itemIndex) in group.widgets"
                 :key="itemIndex"
+                :data-apos-focus-priority="itemIndex === 0 ? true : null"
                 class="apos-widget"
                 @click="add(item)"
               >
@@ -36,16 +36,17 @@
                     class="apos-icon--add"
                   />
                   <img
-                    v-if="item.previewImage"
-                    :src="previewUrl(item)"
+                    v-if="item.previewUrl"
+                    :src="item.previewUrl"
                     :alt="`${item.name} preview`"
                     class="apos-widget__preview-image"
                   >
                   <component
+                    :is="getIcon(item)"
                     v-else-if="hasIcon(item)"
+                    :title="getTitle(item)"
                     :size="25"
                     class="apos-widget__preview--icon"
-                    :is="item.previewIcon || item.icon"
                   />
                 </div>
                 <p class="apos-widget__label">
@@ -54,7 +55,7 @@
                 <p v-if="item.description" class="apos-widget__help">
                   {{ $t(item.description) }}
                 </p>
-              </div>
+              </button>
             </div>
           </div>
         </template>
@@ -76,7 +77,7 @@ export default {
       default: 0
     }
   },
-  emits: [ 'expanded-menu-close', 'safe-close', 'modal-result' ],
+  emits: [ 'expanded-menu-close', 'modal-result' ],
   data() {
     return {
       modal: {
@@ -117,10 +118,45 @@ export default {
         'apos.expanded-menu: No groups or widgets defined. Please, either add a groups or widgets property to your area configuration.'
       );
     }
+
+    const clipboard = this.getClipboard();
+    this.groups = clipboard
+      ? [ clipboard ].concat(this.groups)
+      : this.groups;
   },
   methods: {
     isValidColumn(count) {
       return count ? +count > 1 && +count < 4 : true;
+    },
+    getClipboard() {
+      const clipboard = apos.area.widgetClipboard.get();
+      if (!clipboard) {
+        return null;
+      }
+
+      const widgets = this.groups.flatMap(group => Object.values(group.widgets));
+      const matchingChoice = widgets.find(widget => widget.name === clipboard.type);
+      if (!matchingChoice) {
+        return null;
+      }
+
+      const group = {
+        label: this.$t('apostrophe:areaExpandedMenuClipboard'),
+        widgets: [
+          {
+            type: 'clipboard',
+            ...matchingChoice,
+            label: {
+              key: 'apostrophe:pasteWidget',
+              widget: this.$t(matchingChoice.label)
+            },
+            clipboard
+          }
+        ],
+        columns: 1
+      };
+
+      return group;
     },
     createGroup(config) {
       const group = {
@@ -138,11 +174,15 @@ export default {
 
       return group;
     },
-    hasIcon(widget) {
+    getIcon(widget) {
       return widget.previewIcon || widget.icon;
     },
-    previewUrl(widget) {
-      return widget.previewImage ? apos.util.assetUrl(`/modules/${widget.name}-widget/preview.${widget.previewImage}`) : '';
+    hasIcon(widget) {
+      return Boolean(widget.previewIcon || widget.icon);
+    },
+    getTitle(widget) {
+      const icon = this.getIcon(widget);
+      return icon.replaceAll('-', ' ');
     },
     close() {
       this.modal.showModal = false;
@@ -166,18 +206,25 @@ export default {
 
 .apos-widget-group {
   &:not(:last-of-type) {
-    margin-bottom: 30px;
+    margin-bottom: 20px;
   }
 
   .apos-widget__preview {
     position: relative;
     display: flex;
-    justify-content: center;
+    overflow: hidden;
     align-items: center;
+    justify-content: center;
     height: 135px;
-    border: 1px solid var(--a-base-7);
+    outline: 1px solid var(--a-base-7);
     border-radius: var(--a-border-radius);
     background-color: var(--a-base-10);
+  }
+
+  &--1-column {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 15px;
   }
 
   &--2-columns {
@@ -189,7 +236,8 @@ export default {
   &--3-columns {
     display: grid;
     grid-template-columns: repeat(3, 1fr);
-    gap: 10px;
+    gap: 15px 10px;
+
     .apos-widget__preview {
       height: 89px;
     }
@@ -198,7 +246,8 @@ export default {
   &--4-columns {
     display: grid;
     grid-template-columns: repeat(4, 1fr);
-    gap: 5px;
+    gap: 15px 5px;
+
     .apos-widget__preview {
       height: 66px;
     }
@@ -206,35 +255,53 @@ export default {
 }
 
 .apos-widget {
+  @include type-base;
+
+  & {
+    padding: 0;
+    border: none;
+    border-radius: var(--a-border-radius);
+    background: none;
+    text-align: inherit;
+  }
+
   .apos-widget__preview {
     transition: opacity 250ms ease-in-out;
+
     .apos-icon--add {
       z-index: $z-index-default;
       position: absolute;
-      // Center in the parent element
-      align-self: center;
-      justify-self: center;
       // Center the child content
       display: flex;
-      justify-content: center;
       align-items: center;
+      // Center in the parent element
+      place-self: center center;
+      justify-content: center;
       width: 27px;
       height: 27px;
+      color: var(--a-white);
       border-radius: 50%;
       background-color: var(--a-primary);
       opacity: 0;
-      color: var(--a-white);
     }
+
     &::after {
-      transition: all 250ms ease-in-out;
       position: absolute;
-      content: '';
       width: 100%;
       height: 100%;
+      transition: all 250ms ease-in-out;
+      content: '';
       background-color: var(--a-primary);
       opacity: 0;
     }
   }
+
+  &:focus,
+  &:active {
+    outline: 2px solid var(--a-primary-light-40);
+    outline-offset: 4px;
+  }
+
   &:hover {
     cursor: pointer;
     // stylelint-disable max-nesting-depth
@@ -242,6 +309,7 @@ export default {
       .apos-icon--add {
         opacity: 1;
       }
+
       &::after {
         opacity: 0.4;
       }
@@ -257,8 +325,21 @@ export default {
 .apos-widget-group__label,
 .apos-widget__help {
   @include type-base;
-  line-height: var(--a-line-tall);
-  color: var(--a-base-4);
-  text-align: left;
+
+  & {
+    margin-top: 0;
+    line-height: var(--a-line-tall);
+    text-align: left;
+  }
+}
+
+.apos-widget__help {
+  color: var(--a-base-2);
+  font-size: var(--a-type-smaller);
+}
+
+.apos-widget__label {
+  line-height: 1.2;
+  margin-bottom: 5px;
 }
 </style>

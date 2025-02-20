@@ -10,10 +10,13 @@
       v-apos-tooltip="undoTooltips.undo"
     >
       <AposButton
-        :disabled="patchesSinceLoaded.length === 0"
-        type="subtle" :modifiers="['small', 'no-motion']"
-        label="apostrophe:undo" class="apos-admin-bar__context-button"
-        icon="undo-icon" :icon-only="true"
+        :disabled="!canUndo"
+        type="subtle"
+        :modifiers="['small', 'no-motion']"
+        label="apostrophe:undo"
+        class="apos-admin-bar__context-button"
+        icon="undo-icon"
+        :icon-only="true"
         @click="undo"
       />
     </div>
@@ -22,20 +25,16 @@
       v-apos-tooltip="undoTooltips.redo"
     >
       <AposButton
-        :disabled="undone.length === 0"
-        type="subtle" :modifiers="['small', 'no-motion']"
-        label="apostrophe:redo" class="apos-admin-bar__context-button"
-        icon="redo-icon" :icon-only="true"
+        :disabled="!canRedo"
+        type="subtle"
+        :modifiers="['small', 'no-motion']"
+        label="apostrophe:redo"
+        class="apos-admin-bar__context-button"
+        icon="redo-icon"
+        :icon-only="true"
         @click="redo"
       />
     </div>
-    <TheAposSavingIndicator
-      :key="'status'"
-      :retrying="retrying"
-      :editing="editing"
-      :saving="saving"
-      :saved="saved"
-    />
   </transition-group>
 </template>
 
@@ -44,22 +43,8 @@
 export default {
   name: 'TheAposContextUndoRedo',
   props: {
-    patchesSinceLoaded: {
-      type: Array,
-      default() {
-        return [];
-      }
-    },
-    undone: {
-      type: Array,
-      default() {
-        return [];
-      }
-    },
-    retrying: Boolean,
-    editing: Boolean,
-    saving: Boolean,
-    saved: Boolean
+    canUndo: Boolean,
+    canRedo: Boolean
   },
   emits: [ 'undo', 'redo' ],
   computed: {
@@ -69,29 +54,45 @@ export default {
         redo: 'apostrophe:redoTooltip'
       };
 
-      if (this.patchesSinceLoaded.length === 0) {
+      if (!this.canUndo) {
         tooltips.undo = 'apostrophe:undoTooltipNoChanges';
       }
 
-      if (this.undone.length === 0) {
+      if (!this.canRedo) {
         tooltips.redo = 'apostrophe:redoTooltipNoChanges';
       }
 
       return tooltips;
     }
   },
+  mounted() {
+    apos.bus.$on('command-menu-admin-bar-undo', this.undo);
+    apos.bus.$on('command-menu-admin-bar-redo', this.redo);
+  },
+  unmounted() {
+    apos.bus.$off('command-menu-admin-bar-undo', this.undo);
+    apos.bus.$off('command-menu-admin-bar-redo', this.redo);
+  },
   methods: {
     undo() {
-      this.$emit('undo');
+      if (this.canUndo) {
+        this.$emit('undo');
+      }
     },
     redo() {
-      this.$emit('redo');
+      if (this.canRedo) {
+        this.$emit('redo');
+      }
     }
   }
 };
 </script>
 <style lang="scss" scoped>
-  ::v-deep .apos-admin-bar__context-button.apos-button__wrapper {
+  .apos-admin-bar__control-set--context-controls {
+    border-right: 1px solid var(--a-base-9);
+  }
+
+  :deep(.apos-admin-bar__context-button.apos-button__wrapper) {
     display: flex;
   }
 </style>

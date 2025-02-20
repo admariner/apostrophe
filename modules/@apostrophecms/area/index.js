@@ -1,5 +1,4 @@
 const _ = require('lodash');
-const deep = require('deep-get-set');
 const { stripIndent } = require('common-tags');
 
 // An area is a series of zero or more widgets, in which users can add
@@ -69,6 +68,36 @@ module.exports = {
             return manager.loadIfSuitable(req, [ widget ]);
           }
           async function render() {
+            if (req.aposExternalFront) {
+              // Simulate an area and annotate it so that the
+              // widget's sub-areas wind up with the right metadata
+              const area = {
+                metaType: 'area',
+                items: [ widget ],
+                _docId
+              };
+              self.apos.template.annotateAreaForExternalFront(field, area);
+              // Annotate sub-areas. It's like annotating a doc, but not quite,
+              // so this logic is reproduced partially
+              self.apos.doc.walk(area, (o, k, v) => {
+                if (v && v.metaType === 'area') {
+                  const manager = self.apos.util.getManagerOf(o);
+                  if (!manager) {
+                    self.apos.util.warnDevOnce('noManagerForDocInExternalFront', `No manager for: ${o.metaType} ${o.type || ''}`);
+                    return;
+                  }
+                  const field = manager.schema.find(f => f.name === k);
+                  v._docId = _docId;
+                  self.apos.template.annotateAreaForExternalFront(field, v);
+                }
+              });
+              const result = {
+                ...req.data,
+                options,
+                widget
+              };
+              return result;
+            }
             return self.renderWidget(req, type, widget, options);
           }
         }
@@ -97,6 +126,10 @@ module.exports = {
       setWidgetManager(name, manager) {
         self.widgetManagers[name] = manager;
       },
+      // Given the options passed to the area field, return the options passed
+      // to each widget type, indexed by widget name. This provides a consistent
+      // interface regardless of whether `options.widgets` or `options.groups`
+      // was used.
       getWidgets(options) {
         let widgets = options.widgets || {};
 
@@ -138,7 +171,11 @@ module.exports = {
       },
       // Render the given `area` object via `area.html`, with the given `context`
       // which may be omitted. Called for you by the `{% area %} custom tag.
-      async renderArea(req, area, _with) {
+      //
+      // If `inline` is true then the rendering of each widget is attached
+      // to the widget as a `_rendered` property, bypassing normal full-area
+      // HTML responses, and the return value of this method is `null`.
+      async renderArea(req, area, _with, { inline = false } = {}) {
         if (!area._id) {
           throw new Error('All areas must have an _id property in A3.x. Area details:\n\n' + JSON.stringify(area));
         }
@@ -164,7 +201,7 @@ module.exports = {
           const manager = self.widgetManagers[name];
           if (manager) {
             choices.push({
-              name: name,
+              name,
               icon: manager.options.icon,
               label: options.addLabel || manager.label || `No label for ${name}`
             });
@@ -183,6 +220,12 @@ module.exports = {
           // just use the helpers
           self.apos.attachment.all(area, { annotate: true });
         }
+        if (inline) {
+          for (const item of area.items) {
+            item._rendered = await self.renderWidget(req, item.type, item, widgets[item.type]);
+          }
+          return null;
+        }
         return self.render(req, 'area', {
           // TODO filter area to exclude big relationship objects, but
           // not so sloppy this time please
@@ -197,7 +240,13 @@ module.exports = {
       // Replace documents' area objects with rendered HTML for each area.
       // This is used by GET requests including the `render-areas` query
       // parameter. `within` is an array of Apostrophe documents.
-      async renderDocsAreas(req, within) {
+      //
+      // If `inline` is true a rendering of each individual widget is
+      // added as an extra `_rendered` property of that widget, alongside
+      // its normal properties. Otherwise a rendering of the entire area
+      // is supplied as the `_rendered` property of that area and the
+      // `items` array is suppressed from the response.
+      async renderDocsAreas(req, within, { inline = false } = {}) {
         within = Array.isArray(within) ? within : [];
         let index = 0;
         // Loop over the docs in the array passed in.
@@ -241,17 +290,19 @@ module.exports = {
         async function render(area, path, context, opts) {
           const preppedArea = self.prepForRender(area, context, path);
 
-          const areaRendered = await self.apos.area.renderArea(req, preppedArea, context);
-
-          deep(context, `${path}._rendered`, areaRendered);
-          deep(context, `${path}._fieldId`, undefined);
-          deep(context, `${path}.items`, undefined);
+          const areaRendered = await self.apos.area.renderArea(req, preppedArea, context, { inline });
+          if (inline) {
+            return;
+          }
+          _.set(context, [ path, '_rendered' ], areaRendered);
+          _.set(context, [ path, '_fieldId' ], undefined);
+          _.set(context, [ path, 'items' ], undefined);
         }
 
         function findParent(doc, dotPath) {
           const pathSplit = dotPath.split('.');
           const parentDotPath = pathSplit.slice(0, pathSplit.length - 1).join('.');
-          return deep(doc, parentDotPath) || doc;
+          return _.get(doc, parentDotPath, doc);
         }
       },
       // Sanitize an input array of items intended to become
@@ -265,12 +316,15 @@ module.exports = {
       // options to sanitize against. Thus h5 can be legal
       // in one rich text widget and not in another.
       //
+      // The `convertOptions` parameter allows to pass options
+      // to the convert method to alter them.
+      //
       // If any errors occur sanitizing the individual widgets,
       // an array of errors with `path` and `error` properties
       // is thrown.
       //
       // Returns a new array of sanitized items.
-      async sanitizeItems(req, items, options) {
+      async sanitizeItems(req, items, options, convertOptions = {}) {
         options = options || {};
         const result = [];
         const errors = [];
@@ -293,7 +347,7 @@ module.exports = {
           }
           let newItem;
           try {
-            newItem = await manager.sanitize(req, item, widgetOptions);
+            newItem = await manager.sanitize(req, item, widgetOptions, convertOptions);
             newItem._id = self.apos.launder.id(item._id) || self.apos.util.generateId();
           } catch (e) {
             if (Array.isArray(e)) {
@@ -324,15 +378,20 @@ module.exports = {
       // to update a widget on the page after it is saved, or for
       // preview when editing.
       async renderWidget(req, type, data, options) {
-        const manager = self.getWidgetManager(type);
-        if (!manager) {
-          // No manager available - possibly a stale widget in the database
-          // of a type no longer in the project
-          self.warnMissingWidgetType(type);
-          return '';
+        try {
+          const manager = self.getWidgetManager(type);
+          if (!manager) {
+            // No manager available - possibly a stale widget in the database
+            // of a type no longer in the project
+            self.warnMissingWidgetType(type);
+            return '';
+          }
+          data.type = type;
+          return manager.output(req, data, options);
+        } catch (e) {
+          console.error(e);
+          throw e;
         }
-        data.type = type;
-        return manager.output(req, data, options);
       },
       // Update or create an area at the specified
       // dot path in the document with the specified
@@ -360,12 +419,12 @@ module.exports = {
           // always okay - unless it already exists
           // and is not an area.
           if (components.length > 1) {
-            const existing = deep(doc, dotPath);
+            const existing = _.get(doc, dotPath);
             if (existing && existing.metaType !== 'area') {
               throw self.apos.error('forbidden');
             }
           }
-          const existingArea = deep(doc, dotPath);
+          const existingArea = _.get(doc, dotPath);
           const existingItems = existingArea && (existingArea.items || []);
           if (_.isEqual(self.apos.util.clonePermanent(items), self.apos.util.clonePermanent(existingItems))) {
             // No real change — don't waste a version and clutter the database.
@@ -373,9 +432,9 @@ module.exports = {
             // nothing has changed. -Tom
             return;
           }
-          deep(doc, dotPath, {
+          _.set(doc, dotPath, {
             metaType: 'area',
-            items: items
+            items
           });
           return self.apos.doc.update(req, doc);
         }
@@ -575,6 +634,8 @@ module.exports = {
         const widgetEditors = {};
         const widgetManagers = {};
         const widgetIsContextual = {};
+        const widgetHasPlaceholder = {};
+        const widgetHasInitialModal = {};
         const contextualWidgetDefaultData = {};
 
         _.each(self.widgetManagers, function (manager, name) {
@@ -584,7 +645,9 @@ module.exports = {
           widgetEditors[name] = (browserData && browserData.components && browserData.components.widgetEditor) || 'AposWidgetEditor';
           widgetManagers[name] = manager.__meta.name;
           widgetIsContextual[name] = manager.options.contextual;
-          contextualWidgetDefaultData[name] = manager.options.defaultData;
+          widgetHasPlaceholder[name] = manager.options.placeholder;
+          widgetHasInitialModal[name] = !manager.options.placeholder && manager.options.initialModal !== false;
+          contextualWidgetDefaultData[name] = manager.options.defaultData || {};
         });
 
         return {
@@ -594,6 +657,8 @@ module.exports = {
             widgetEditors
           },
           widgetIsContextual,
+          widgetHasPlaceholder,
+          widgetHasInitialModal,
           contextualWidgetDefaultData,
           widgetManagers,
           action: self.action
@@ -681,7 +746,7 @@ module.exports = {
         } else {
           area = doc[name];
         }
-        return self.isEmpty({ area: area });
+        return self.isEmpty({ area });
       }
     };
   },

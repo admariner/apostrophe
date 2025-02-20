@@ -1,16 +1,24 @@
+import { klona } from 'klona';
+
 export default {
   // Implements v-model pattern
-  emits: [ 'input' ],
+  emits: [ 'update:modelValue' ],
   props: {
     // The value passed in from the parent component through the v-model
     // directive.
-    value: {
+    modelValue: {
       type: Object,
       required: true
     },
     field: {
       type: Object,
       required: true
+    },
+    meta: {
+      type: Object,
+      default() {
+        return {};
+      }
     },
     modifiers: {
       default: function () {
@@ -47,25 +55,31 @@ export default {
     serverError: {
       type: Object,
       required: false
+    },
+
+    noBlurEmit: {
+      type: Boolean,
+      default: false
     }
   },
   data () {
     return {
-      next: (this.value && this.value.data !== undefined)
-        ? this.value.data : '',
+      next: (this.modelValue && this.modelValue.data !== undefined) ? this.modelValue.data : '',
       error: false,
       // This is just meant to be sufficient to prevent unintended collisions
       // in the UI between id attributes
       uid: Math.random(),
       // Automatically updated for you, can be watched
-      focus: false
+      focus: false,
+      // Can be overriden at input component level to handle async field preparation
+      fieldReady: true
     };
   },
   mounted () {
     this.$el.addEventListener('focusin', this.focusInListener);
     this.$el.addEventListener('focusout', this.focusOutListener);
   },
-  destroyed () {
+  unmounted () {
     this.$el.removeEventListener('focusin', this.focusInListener);
     this.$el.removeEventListener('focusout', this.focusOutListener);
   },
@@ -83,16 +97,19 @@ export default {
     tooltip () {
       let msg = false;
       if (this.field.readOnly) {
-        msg = 'This field is disabled';
+        msg = 'apostrophe:inputFieldIsDisabled';
       }
       return msg;
     },
     effectiveError () {
       return this.error || this.serverError;
+    },
+    fieldMeta() {
+      return this.meta?.[this.field.name] || {};
     }
   },
   watch: {
-    value: {
+    modelValue: {
       deep: true,
       handler (value) {
         this.watchValue();
@@ -112,7 +129,7 @@ export default {
       }
     },
     focus(value) {
-      if (!value) {
+      if (!this.noBlurEmit && !value) {
         this.validateAndEmit();
       }
     }
@@ -121,19 +138,30 @@ export default {
     // You must supply the validate method. It receives the
     // internal representation used for editing (a string, for instance)
     validateAndEmit () {
+      if (!this.fieldReady) {
+        return;
+      }
       // If the field is conditional and isn't shown, disregard any errors.
-      const error = this.conditionMet === false ? false
-        : this.validate(this.next);
-      this.$emit('input', {
+      // If field isn't ready we don't want to validate its value
+      const shouldValidate = this.conditionMet !== false;
+      const error = shouldValidate
+        ? this.validate(this.next)
+        : false;
+
+      this.$emit('update:modelValue', {
         data: error ? this.next : this.convert(this.next),
         error,
-        ranValidation: this.conditionMet === false ? this.value.ranValidation
-          : true
+        ranValidation: shouldValidate ? true : this.modelValue.ranValidation
       });
     },
+    // Allows replacing the current component value externally, e.g. via
+    // local component or global bus events.
+    replaceFieldValue(value) {
+      this.next = value;
+    },
     watchValue () {
-      this.error = this.value.error;
-      this.next = this.value.data;
+      this.error = this.modelValue.error;
+      this.next = this.modelValue.data;
     },
     watchNext () {
       this.validateAndEmit();
@@ -154,6 +182,36 @@ export default {
     // experience.
     convert() {
       return this.next;
+    },
+    // Accepts an array of object values and convertts the current meta to items
+    // so that it contains only the item _id's as keys (without leading `@`) and
+    // meta keys for the current field if any.
+    // This util is meant to be used in array and widget wrappers or
+    // custom fields that manage array of object values having unique `_id`.
+    convertMetaToItems(valueItems = []) {
+      const fieldMeta = klona(this.fieldMeta);
+      const meta = this.meta || {};
+
+      const shared = {};
+      for (const fieldName of Object.keys(meta)) {
+        if (fieldName.startsWith('@') && !valueItems.some(item => meta[`@${item._id}`])) {
+          shared[fieldName] = meta[fieldName];
+          continue;
+        }
+      }
+      for (const item of valueItems) {
+        const itemMeta = meta[`@${item._id}`] || {};
+        const subMeta = itemMeta.aposMeta;
+        fieldMeta[item._id] = {
+          ...itemMeta,
+          aposMeta: {
+            ...(subMeta || {}),
+            ...shared
+          }
+        };
+      }
+
+      return fieldMeta;
     }
   }
 };

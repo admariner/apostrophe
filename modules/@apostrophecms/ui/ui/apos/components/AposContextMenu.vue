@@ -1,175 +1,391 @@
 <template>
-  <div class="apos-context-menu">
+  <section
+    ref="contextMenuRef"
+    class="apos-context-menu"
+    @keydown.tab="onTab"
+  >
     <slot name="prebutton" />
-    <v-popover
-      @hide="hide"
-      @show="show"
-      :offset="menuOffset"
-      trigger="manual"
-      :placement="menuPlacement"
-      :open="isOpen"
-      :delay="{ show: 0, hide: 0 }"
-      :popover-class="popoverClass"
-      popover-wrapper-class="apos-popover__wrapper"
-      popover-inner-class="apos-popover__inner"
+    <div
+      ref="dropdown"
+      class="apos-popover__btn apos-context-menu__dropdown"
     >
-      <!-- TODO refactor buttons to take a single config obj -->
       <AposButton
-        class="apos-context-menu__btn"
-        data-apos-test="contextMenuTrigger"
-        @click.stop="buttonClicked($event)"
         v-bind="button"
+        ref="dropdownButton"
+        class="apos-context-menu__btn"
+        role="button"
+        :data-apos-test="identifier"
         :state="buttonState"
-        ref="button"
         :disabled="disabled"
         :tooltip="tooltip"
-        role="button"
         :attrs="{
           'aria-haspopup': 'menu',
           'aria-expanded': isOpen ? true : false
         }"
+        @icon="setIconToCenterTo"
+        @click.stop="buttonClicked($event)"
       />
-      <template #popover class="apos-popover__slot">
+      <div
+        v-if="isOpen"
+        ref="dropdownContent"
+        v-click-outside-element="hide"
+        :data-apos-test="isRendered ? 'context-menu-content' : null"
+        class="apos-context-menu__dropdown-content"
+        :class="popoverClass"
+        data-apos-menu
+        :style="dropdownContentStyle"
+        :aria-hidden="!isOpen"
+      >
         <AposContextMenuDialog
-          :menu-placement="menuPlacement"
+          :menu-placement="placement"
           :class-list="classList"
           :menu="menu"
+          :active-item="activeItem"
+          :is-open="isOpen"
           @item-clicked="menuItemClicked"
+          @set-arrow="setArrow"
         >
           <slot />
         </AposContextMenuDialog>
-      </template>
-    </v-popover>
-  </div>
+      </div>
+    </div>
+  </section>
 </template>
 
-<script>
+<script setup>
 import {
-  VPopover
-} from 'v-tooltip';
-import AposThemeMixin from 'Modules/@apostrophecms/ui/mixins/AposThemeMixin';
+  ref, computed, watch, onMounted, onBeforeUnmount
+} from 'vue';
+import {
+  computePosition, offset, shift, flip, arrow
+} from '@floating-ui/dom';
+import { createId } from '@paralleldrive/cuid2';
 
-export default {
-  name: 'AposContextMenu',
-  components: {
-    'v-popover': VPopover
+import { useAposTheme } from '../composables/AposTheme.js';
+import { useFocusTrap } from '../composables/AposFocusTrap.js';
+
+const props = defineProps({
+  identifier: {
+    type: String,
+    default: 'contextMenuTrigger'
   },
-  mixins: [ AposThemeMixin ],
-  props: {
-    menu: {
-      type: Array,
-      default: null
-    },
-    unpadded: {
-      type: Boolean,
-      default: false
-    },
-    modifiers: {
-      type: Array,
-      default() {
-        return [];
-      }
-    },
-    button: {
-      type: Object,
-      default() {
-        return {
-          label: 'Context Menu Label',
-          iconOnly: true,
-          icon: 'label-icon',
-          type: 'outline'
-        };
-      }
-    },
-    menuPlacement: {
-      type: String,
-      default: 'bottom'
-    },
-    menuOffset: {
-      type: [ Number, String ],
-      default: 15
-    },
-    disabled: {
-      type: Boolean,
-      default: false
-    },
-    tooltip: {
-      type: [ String, Boolean ],
-      default: false
-    },
-    popoverModifiers: {
-      type: Array,
-      default() {
-        return [];
-      }
+  menu: {
+    type: Array,
+    default: null
+  },
+  unpadded: {
+    type: Boolean,
+    default: false
+  },
+  modifiers: {
+    type: Array,
+    default() {
+      return [];
     }
   },
-  emits: [ 'open', 'close', 'item-clicked' ],
-  data() {
-    return {
-      isOpen: false,
-      position: '',
-      event: null
-    };
-  },
-  computed: {
-    popoverClass() {
-      const classes = [ 'apos-popover' ].concat(this.themeClass);
-      this.popoverModifiers.forEach(m => {
-        classes.push(`apos-popover--${m}`);
-      });
-      return classes;
-    },
-    classList() {
-      const classes = [];
-      const baseClass = 'apos-context-menu__popup';
-      classes.push(`${baseClass}--tip-alignment-${this.menuPlacement}`);
-      if (this.modifiers) {
-        this.modifiers.forEach((m) => {
-          classes.push(`${baseClass}--${m}`);
-        });
-      }
-      if (this.menu || this.unpadded) {
-        classes.push(`${baseClass}--unpadded`);
-      }
-      return classes.join(' ');
-    },
-    buttonState() {
-      return this.open ? [ 'active' ] : null;
+  button: {
+    type: Object,
+    default() {
+      return {
+        label: 'Context Menu Label',
+        iconOnly: true,
+        icon: 'label-icon',
+        type: 'outline'
+      };
     }
   },
-  watch: {
-    isOpen(newVal, oldVal) {
-      if (newVal) {
-        this.$emit('open', this.event);
-      } else {
-        this.$emit('close', this.event);
-      }
+  menuPlacement: {
+    type: String,
+    default: 'bottom'
+  },
+  menuOffset: {
+    type: [ Number, Array ],
+    default: 15
+  },
+  disabled: {
+    type: Boolean,
+    default: false
+  },
+  tooltip: {
+    type: [ String, Boolean ],
+    default: false
+  },
+  popoverModifiers: {
+    type: Array,
+    default() {
+      return [];
     }
   },
-  methods: {
-    show() {
-      this.isOpen = true;
-    },
-    hide() {
-      this.isOpen = false;
-    },
-    buttonClicked(e) {
-      this.isOpen = !this.isOpen;
-      this.event = e;
-    },
-    menuItemClicked(name) {
-      this.$emit('item-clicked', name);
-      this.hide();
+  menuId: {
+    type: String,
+    default() {
+      return createId();
+    }
+  },
+  centerOnIcon: {
+    type: Boolean,
+    default: false
+  },
+  activeItem: {
+    type: String,
+    default: null
+  },
+  trapFocus: {
+    type: Boolean,
+    default: true
+  },
+  // When set to true, the elements to focus on will be re-queried
+  // on everu Tab key press. Use this with caution, as it's a performance
+  // hit. Only use this if you have a context menu with
+  // dynamically changing (e.g. AposToggle item enables another item) items.
+  dynamicFocus: {
+    type: Boolean,
+    default: false
+  }
+});
+
+const emit = defineEmits([ 'open', 'close', 'item-clicked' ]);
+
+const isOpen = ref(false);
+const isRendered = ref(false);
+const placement = ref(props.menuPlacement);
+const event = ref(null);
+/** @type {import('vue').Ref<HTMLElement | null>}} */
+const contextMenuRef = ref(null);
+/** @type {import('vue').Ref<HTMLElement | null>}} */
+const dropdown = ref(null);
+/** @type {import('vue').Ref<import('vue').ComponentPublicInstance | null>} */
+const dropdownButton = ref(null);
+/** @type {import('vue').Ref<HTMLElement | null>} */
+const dropdownContent = ref(null);
+const dropdownContentStyle = ref({});
+const arrowEl = ref(null);
+const iconToCenterTo = ref(null);
+const menuOffset = getMenuOffset();
+const otherMenuOpened = ref(false);
+
+const {
+  onTab, runTrap, hasRunningTrap, resetTrap
+} = useFocusTrap({
+  withPriority: true,
+  refreshOnCycle: props.dynamicFocus
+  // If enabled, the dropdown gets closed when the focus leaves
+  // the context menu.
+  // triggerRef: dropdownButton,
+  // onExit: hide
+});
+
+defineExpose({
+  hide,
+  setDropdownPosition
+});
+
+const popoverClass = computed(() => {
+  const classes = [ 'apos-popover' ].concat(themeClass.value);
+  props.popoverModifiers.forEach(m => {
+    classes.push(`apos-popover--${m}`);
+  });
+  return classes;
+});
+
+const classList = computed(() => {
+  const classes = [];
+  const baseClass = 'apos-context-menu__popup';
+  classes.push(`${baseClass}--tip-alignment-${props.menuPlacement}`);
+  if (props.modifiers) {
+    props.modifiers.forEach((m) => {
+      classes.push(`${baseClass}--${m}`);
+    });
+  }
+  if (props.menu || props.unpadded) {
+    classes.push(`${baseClass}--unpadded`);
+  }
+  return classes.join(' ');
+});
+
+const buttonState = computed(() => {
+  return isOpen.value ? [ 'active' ] : null;
+});
+
+watch(isOpen, async (newVal) => {
+  emit(newVal ? 'open' : 'close', event.value);
+  if (newVal) {
+    setDropdownPosition();
+    window.addEventListener('resize', setDropdownPosition);
+    window.addEventListener('scroll', setDropdownPosition);
+    contextMenuRef.value?.addEventListener('keydown', handleKeyboard);
+    if (props.trapFocus && !hasRunningTrap.value) {
+      await runTrap(dropdownContent);
+    }
+    if (!props.trapFocus) {
+      dropdownContent.value.querySelector('[tabindex]')?.focus();
+    }
+    isRendered.value = true;
+  } else {
+    if (props.trapFocus) {
+      resetTrap();
+    }
+    window.removeEventListener('resize', setDropdownPosition);
+    window.removeEventListener('scroll', setDropdownPosition);
+    contextMenuRef.value?.addEventListener('keydown', handleKeyboard);
+    if (!otherMenuOpened.value && !props.trapFocus) {
+      dropdown.value.querySelector('[tabindex]').focus();
     }
   }
-};
+  otherMenuOpened.value = false;
+}, { flush: 'post' });
+
+const { themeClass } = useAposTheme();
+
+onMounted(() => {
+  apos.bus.$on('context-menu-toggled', hideWhenOtherOpen);
+  apos.bus.$on('close-context-menus', hide);
+});
+
+onBeforeUnmount(() => {
+  apos.bus.$off('context-menu-toggled', hideWhenOtherOpen);
+  apos.bus.$off('close-context-menus', hide);
+});
+
+function getMenuOffset() {
+  return {
+    mainAxis: Array.isArray(props.menuOffset) ? props.menuOffset[0] : props.menuOffset,
+    crossAxis: Array.isArray(props.menuOffset) ? (props.menuOffset[1] ?? 0) : 0
+  };
+}
+
+function hideWhenOtherOpen({ menuId }) {
+  if (props.menuId !== menuId) {
+    otherMenuOpened.value = true;
+    hide();
+  }
+}
+
+function setIconToCenterTo(el) {
+  if (el && props.centerOnIcon) {
+    iconToCenterTo.value = el;
+  }
+}
+
+function hide() {
+  isOpen.value = false;
+}
+
+function buttonClicked(e) {
+  isOpen.value = !isOpen.value;
+  apos.bus.$emit('context-menu-toggled', {
+    menuId: props.menuId,
+    isOpen: isOpen.value
+  });
+  event.value = e;
+}
+
+function setArrow(el) {
+  arrowEl.value = el;
+}
+
+function menuItemClicked(name) {
+  emit('item-clicked', name);
+  hide();
+}
+
+async function setDropdownPosition() {
+  if (!dropdown.value || !dropdownContent.value) {
+    return;
+  }
+  const centerArrowEl = iconToCenterTo.value || dropdown.value;
+  const {
+    x, y, middlewareData, placement: dropdownPlacement
+  } = await computePosition(centerArrowEl, dropdownContent.value, {
+    placement: props.menuPlacement,
+    middleware: [
+      offset(menuOffset),
+      shift({ padding: 5 }),
+      flip(),
+      arrow({
+        element: arrowEl.value,
+        padding: 5
+      })
+    ]
+  });
+
+  placement.value = dropdownPlacement;
+  dropdownContentStyle.value = {
+    left: `${x}px`,
+    top: `${y}px`
+  };
+
+  const { x: arrowX, y: arrowY } = middlewareData.arrow;
+  Object.assign(arrowEl.value.style, {
+    ...arrowX && { left: `${arrowX}px` },
+    ...arrowY && { top: `${arrowY}px` }
+  });
+}
+
+const ignoreInputTypes = [
+  'text',
+  'password',
+  'email',
+  'file',
+  'number',
+  'search',
+  'tel',
+  'url',
+  'date',
+  'time',
+  'datetime-local',
+  'month',
+  'search',
+  'week'
+];
+
+/**
+ * @param {KeyboardEvent} event
+ */
+function handleKeyboard(event) {
+  if (event.key !== 'Escape' || !isOpen.value) {
+    return;
+  }
+  /** @type {HTMLElement} */
+  const target = event.target;
+
+  // If inside of an input or textarea, don't close the dropdown
+  // and don't allow other event listeners to close it either (e.g. modals)
+  if (
+    target?.nodeName?.toLowerCase() === 'textarea' ||
+    (target?.nodeName?.toLowerCase() === 'input' &&
+      ignoreInputTypes.includes(target.getAttribute('type'))
+    )
+  ) {
+    event.stopImmediatePropagation();
+    return;
+  }
+
+  dropdownButton.value?.focus
+    ? dropdownButton.value.focus()
+    : dropdownButton.value?.$el?.focus();
+
+  event.stopImmediatePropagation();
+  hide();
+}
 </script>
 
 <style lang="scss">
+.apos-context-menu__dropdown-content {
+  z-index: $z-index-notifications;
+  position: absolute;
+  line-height: var(--a-line-base);
+  width: max-content;
 
-.apos-context-menu {
-  position: relative;
+  &[aria-hidden='true'] {
+    visibility: hidden;
+    opacity: 0;
+  }
+
+  &[aria-hidden='false'] {
+    visibility: visible;
+    opacity: 1;
+  }
 }
 
 .apos-context-menu__popup--unpadded .apos-context-menu__pane  {
@@ -184,7 +400,7 @@ export default {
 .apos-context-menu__popup {
   display: inline-block;
   color: var(--a-text-primary);
-  transition: scale 0.15s ease, translatey 0.15s ease;
+  transition: scale 200ms ease, translatey 200ms ease;
 }
 
 .apos-context-menu__inner {
@@ -196,11 +412,15 @@ export default {
 
 .apos-context-menu__pane {
   @include type-base;
-  padding: 20px;
-  border: 1px solid var(--a-base-8);
-  border-radius: var(--a-border-radius);
-  box-shadow: var(--a-box-shadow);
-  background-color: var(--a-background-primary);
+
+  & {
+    padding: 20px;
+    border: 1px solid var(--a-base-8);
+    border-radius: var(--a-border-radius);
+    box-shadow: var(--a-box-shadow);
+    background-color: var(--a-background-primary);
+  }
+
   &:focus {
     outline: none;
   }
@@ -208,64 +428,14 @@ export default {
 
 .apos-context-menu__items {
   @include apos-list-reset();
-  display: inline-block;
-  list-style-type: none;
-  width: max-content;
-  margin: none;
-  margin-block-start: 0;
-  margin-block-end: 0;
-  padding: 10px 0;
-}
 
-.apos-context-menu {
-  & ::v-deep .apos-popover__wrapper,
-  & ::v-deep div:not([class]),
-  & ::v-deep .apos-context-menu__dialog,
-  & ::v-deep .apos-popover,
-  & ::v-deep .apos-popover__inner {
-    &:focus {
-      outline: none;
-    }
+  & {
+    display: inline-block;
+    list-style-type: none;
+    width: max-content;
+    margin: none;
+    margin-block: 0;
+    padding: 10px 0;
   }
 }
-
-.apos-popover {
-  z-index: $z-index-modal;
-  display: block;
-
-  .tooltip-arrow {
-    display: none;
-  }
-
-  &[x-placement^='top'] {
-    margin-bottom: 5px;
-  }
-
-  &[x-placement^='bottom'] {
-    margin-top: 5px;
-  }
-
-  &[x-placement$='end'] {
-    margin-right: -15px;
-  }
-
-  &[x-placement$='start'] {
-    margin-left: -15px;
-  }
-
-  &[aria-hidden='true'] {
-    visibility: hidden;
-    opacity: 0;
-  }
-
-  &[aria-hidden='false'] {
-    visibility: visible;
-    opacity: 1;
-  }
-}
-
-.apos-popover--z-index-in-context {
-  z-index: $z-index-widget-focused-controls;
-}
-
 </style>

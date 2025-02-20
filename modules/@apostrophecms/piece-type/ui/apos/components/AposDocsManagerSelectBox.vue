@@ -12,16 +12,22 @@
           {{ selectBoxMessage }}
           <AposButton
             v-if="!allPiecesSelection.isSelected"
-            type="subtle" :modifiers="['inline', 'small', 'no-motion']"
-            :label="selectBoxMessageButton" class="apos-select-box__select-all"
-            @click="$emit('select-all')"
+            type="subtle"
+            :modifiers="['inline', 'small', 'no-motion']"
+            :label="selectBoxMessageButton"
+            class="apos-select-box__select-all"
             text-color="var(--a-primary)"
+            :disabled="!showSelectAll"
+            @click="$emit('select-all')"
           />
           <AposButton
             v-else
-            type="subtle" :modifiers="['inline', 'small', 'no-motion']"
-            label="apostrophe:clearSelection" class="apos-select-box__select-all"
+            type="subtle"
+            :modifiers="['inline', 'small', 'no-motion']"
+            label="apostrophe:clearSelection"
+            class="apos-select-box__select-all"
             text-color="var(--a-primary)"
+            :disabled="!showSelectAll"
             @click="clearSelection"
           />
         </p>
@@ -59,7 +65,7 @@ export default {
     showSelectAll() {
       if (
         this.allPiecesSelection.isSelected ||
-        (this.selectedState === 'checked' && this.allPiecesSelection.total > this.displayedItems)
+        ([ 'checked', 'indeterminate' ].includes(this.selectedState) && this.allPiecesSelection.total > this.displayedItems)
       ) {
         return true;
       }
@@ -111,10 +117,10 @@ export default {
 </script>
 <style lang='scss' scoped>
   .apos-select-box {
-    box-sizing: border-box;
     overflow: hidden;
-    max-height: 65px;
+    box-sizing: border-box;
     transition: max-height 200ms ease-in;
+    max-height: 65px;
 
     &.collapse-enter, &.collapse-leave-to {
       max-height: 0;

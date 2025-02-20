@@ -15,8 +15,17 @@
  */
 
 import { klona } from 'klona';
+import {
+  evaluateExternalConditions, getConditionalFields, getConditionTypesObject
+} from 'Modules/@apostrophecms/schema/lib/conditionalFields.js';
 
 export default {
+  props: {
+    parentFollowingValues: {
+      type: Object,
+      default: null
+    }
+  },
   data() {
     return {
       docFields: {
@@ -24,14 +33,17 @@ export default {
       },
       serverErrors: null,
       restoreOnly: false,
-      changed: []
+      readOnly: false,
+      changed: [],
+      externalConditionsResults: getConditionTypesObject(),
+      conditionalFields: getConditionTypesObject()
     };
   },
 
   computed: {
     schema() {
       let schema = (this.moduleOptions.schema || []).filter(field => apos.schema.components.fields[field.type]);
-      if (this.restoreOnly) {
+      if (this.restoreOnly || this.readOnly) {
         schema = klona(schema);
         for (const field of schema) {
           field.readOnly = true;
@@ -40,10 +52,36 @@ export default {
       // Archive UI is handled via action buttons
       schema = schema.filter(field => field.name !== 'archived');
       return schema;
+    },
+    docMeta() {
+      return this.docFields.data?.aposMeta || {};
+    }
+  },
+
+  watch: {
+    docType: {
+      // Evaluate external conditions found in current page-type's schema
+      async handler() {
+        if (this.moduleName === '@apostrophecms/page') {
+          await this.evaluateExternalConditions();
+          this.evaluateConditions();
+        }
+      }
     }
   },
 
   methods: {
+    // Evaluate the external conditions found in each field
+    // via API calls -made in parallel for performance-
+    // and store their result for reusability.
+    async evaluateExternalConditions() {
+      this.externalConditionsResults = await evaluateExternalConditions(
+        this.schema,
+        this.docId || this.docFields?.data?._docId,
+        this.$t
+      );
+    },
+
     // followedByCategory may be falsy (all fields), "other" or "utility". The returned
     // object contains properties named for each field in that category that
     // follows other fields. For instance if followedBy is "utility" then in our
@@ -54,13 +92,21 @@ export default {
       const fields = this.getFieldsByCategory(followedByCategory);
 
       const followingValues = {};
+      const parentFollowing = {};
+      for (const [ key, val ] of Object.entries(this.parentFollowingValues || {})) {
+        parentFollowing[`<${key}`] = val;
+      }
 
       for (const field of fields) {
         if (field.following) {
           const following = Array.isArray(field.following) ? field.following : [ field.following ];
           followingValues[field.name] = {};
           for (const name of following) {
-            followingValues[field.name][name] = this.getFieldValue(name);
+            if (name.startsWith('<')) {
+              followingValues[field.name][name] = parentFollowing[name];
+            } else {
+              followingValues[field.name][name] = this.getFieldValue(name);
+            }
           }
         }
       }
@@ -71,7 +117,7 @@ export default {
     // 'utility' or 'other', or the entire schema if followedByCategory
     // is falsy
     getFieldsByCategory(followedByCategory) {
-      if (followedByCategory) {
+      if (followedByCategory && this.utilityFields) {
         return (followedByCategory === 'other')
           ? this.schema.filter(field => !this.utilityFields.includes(field.name))
           : this.schema.filter(field => this.utilityFields.includes(field.name));
@@ -92,60 +138,18 @@ export default {
     // the returned object will contain properties only for conditional fields
     // in that category, although they may be conditional upon fields in either
     // category.
+    getConditionalFields(followedByCategory) {
+      return getConditionalFields(
+        this.schema,
+        this.getFieldsByCategory(followedByCategory),
+        // currentDoc for arrays, docFields for all other editors
+        this.currentDoc ? this.currentDoc.data : this.docFields.data,
+        this.externalConditionsResults
+      );
+    },
 
-    conditionalFields(followedByCategory) {
-
-      const self = this;
-      const conditionalFields = {};
-
-      while (true) {
-        let change = false;
-        for (const field of this.schema) {
-          if (field.if) {
-            const result = evaluate(field.if);
-            const previous = conditionalFields[field.name];
-            if (previous !== result) {
-              change = true;
-            }
-            conditionalFields[field.name] = result;
-          }
-        }
-        if (!change) {
-          break;
-        }
-      }
-
-      const fields = this.getFieldsByCategory(followedByCategory);
-      const result = {};
-      for (const field of fields) {
-        if (field.if) {
-          result[field.name] = conditionalFields[field.name];
-        }
-      }
-      return result;
-
-      function evaluate(clause) {
-        let result = true;
-        for (const [ key, val ] of Object.entries(clause)) {
-          if (key === '$or') {
-            return val.some(clause => evaluate(clause));
-          }
-          if (conditionalFields[key] === false) {
-            result = false;
-            break;
-          }
-          if (Array.isArray(self.getFieldValue(key))) {
-            result = self.getFieldValue(key).includes(val);
-            break;
-          }
-          if (val !== self.getFieldValue(key)) {
-            result = false;
-            break;
-          }
-        }
-        return result;
-      }
-
+    evaluateConditions() {
+      this.conditionalFields = this.getConditionalFields();
     },
 
     // Overridden by components that split the fields into several AposSchemas

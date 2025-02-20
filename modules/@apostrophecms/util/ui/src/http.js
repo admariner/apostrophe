@@ -75,6 +75,10 @@ export default () => {
   // `uploadProgress` (may be a function accepting `sent` and `total` parameters. May never be called. If
   // called, `sent` will be the bytes sent so far, and `total` will be the total bytes to be
   // sent. If the total is unknown, it will be `null`)
+  // `prefix`: If explicitly set to `false`, do not automatically prefix the URL,
+  // even if the site has a site-wide prefix or locale prefix.
+  // It can become handy when the given url is already prefixed,
+  // which is the case when using the document's computed `_url` field for instance.
   //
   // If the status code is >= 400 an error is thrown. The error object will be
   // similar to a `fullResponse` object, with a `status` property.
@@ -95,6 +99,9 @@ export default () => {
         throw new Error('If you wish to receive a promise from apos.http methods in older browsers you must have a Promise polyfill. If you do not want to provide one, pass a callback instead.');
       }
       return new window.Promise(function(resolve, reject) {
+        if (!url) {
+          return reject(new Error('url is not defined'));
+        }
         return apos.http.remote(method, url, options, function(err, result) {
           if (err) {
             return reject(err);
@@ -104,11 +111,14 @@ export default () => {
       });
     }
 
-    if (apos.prefix) {
-      // We don't need a prefix if the target URL is already prefixed,
-      // which any absolute URL should be
+    if (!url) {
+      return callback(new Error('url is not defined'));
+    }
+
+    if (apos.sitePrefix && options.prefix !== false) {
+      // Prepend the prefix if the URL is absolute:
       if (url.substring(0, 1) === '/') {
-        url = apos.prefix + url;
+        url = apos.sitePrefix + url;
       }
     }
 
@@ -143,9 +153,16 @@ export default () => {
     let keys;
     let i;
 
-    if (options.qs) {
-      url = apos.http.addQueryToUrl(url, options.qs);
-    }
+    qat = url.indexOf('?');
+    const qs = {
+      ...qat !== -1 && apos.http.parseQuery(url.substring(qat)),
+      ...options.qs || {},
+      ...options.qs?.aposLocale
+        ? { aposLocale: options.qs.aposLocale }
+        : { aposLocale: apos.getActiveLocale() }
+    };
+    url = apos.http.addQueryToUrl(url, qs);
+
     if (options.busy) {
       if (!busyActive[busyName]) {
         busyActive[busyName] = 0;

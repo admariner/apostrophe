@@ -3,9 +3,9 @@ const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
 
-let apos;
-
 describe('Pieces Public API', function() {
+
+  let apos;
 
   this.timeout(t.timeout);
 
@@ -70,6 +70,38 @@ describe('Pieces Public API', function() {
     } catch (e) {
       assert(e.status === 404);
     }
+  });
+
+  it('should not be able to retrieve a piece by id from the database without a public API projection as a guest', async function() {
+    await t.createUser(apos, 'guest');
+    const jar = await t.loginAs(apos, 'guest');
+    try {
+      await apos.http.get('/api/v1/thing', {
+        jar
+      });
+      // Bad, we expected a 404
+      assert(false);
+    } catch (e) {
+      assert(e.status === 404);
+    }
+  });
+
+  it('should be able to retrieve a piece by id from the database without a public API projection as a guest if guest API access is enabled', async function() {
+    let response;
+    try {
+      apos.modules.thing.options.guestApiAccess = true;
+      const jar = await t.loginAs(apos, 'guest');
+      response = await apos.http.get('/api/v1/thing', {
+        jar
+      });
+    } finally {
+      apos.modules.thing.options.guestApiAccess = false;
+    }
+    assert(response);
+    assert(response.results);
+    assert(response.results.length === 1);
+    assert(response.results[0].title === 'hello');
+    assert(response.results[0].foo === 'bar');
   });
 
   it('should be able to anonymously retrieve a piece by id from the database with a public API projection', async function() {
@@ -197,42 +229,42 @@ describe('Pieces Public API', function() {
     assert(Object.keys(att._urls).length > 0);
   });
 
-});
+  // HELPERS
+  const uploadSource = path.join(__dirname, '/data/upload_tests/');
 
-// HELPERS
-const uploadSource = path.join(__dirname, '/data/upload_tests/');
+  async function wipeUploads() {
+    deleteFolderRecursive(path.join(__dirname, '/public/uploads'));
+    await await apos.doc.db.deleteMany({ type: '@apostrophecms/image' });
+    return apos.db.collection('aposAttachments').deleteMany({});
 
-async function wipeUploads() {
-  deleteFolderRecursive(path.join(__dirname, '/public/uploads'));
-  await await apos.doc.db.deleteMany({ type: '@apostrophecms/image' });
-  return apos.db.collection('aposAttachments').deleteMany({});
-
-  function deleteFolderRecursive (path) {
-    let files = [];
-    if (fs.existsSync(path)) {
-      files = fs.readdirSync(path);
-      files.forEach(function(file, index) {
-        const curPath = path + '/' + file;
-        if (fs.lstatSync(curPath).isDirectory()) { // recurse
-          deleteFolderRecursive(curPath);
-        } else { // delete file
-          fs.unlinkSync(curPath);
-        }
-      });
-      fs.rmdirSync(path);
+    function deleteFolderRecursive (path) {
+      let files = [];
+      if (fs.existsSync(path)) {
+        files = fs.readdirSync(path);
+        files.forEach(function(file, index) {
+          const curPath = path + '/' + file;
+          if (fs.lstatSync(curPath).isDirectory()) { // recurse
+            deleteFolderRecursive(curPath);
+          } else { // delete file
+            fs.unlinkSync(curPath);
+          }
+        });
+        fs.rmdirSync(path);
+      }
     }
   }
-}
 
-async function upload(filename) {
-  const info = await apos.attachment.insert(apos.task.getReq(), {
-    name: filename,
-    path: uploadSource + filename
-  });
-  // make sure it exists in mongo
-  const result = await apos.db.collection('aposAttachments').findOne({
-    _id: info._id
-  });
-  assert(result);
-  return result;
-}
+  async function upload(filename) {
+    const info = await apos.attachment.insert(apos.task.getReq(), {
+      name: filename,
+      path: uploadSource + filename
+    });
+    // make sure it exists in mongo
+    const result = await apos.db.collection('aposAttachments').findOne({
+      _id: info._id
+    });
+    assert(result);
+    return result;
+  }
+
+});

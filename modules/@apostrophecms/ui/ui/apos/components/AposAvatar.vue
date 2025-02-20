@@ -2,7 +2,8 @@
 <template>
   <div
     class="apos-avatar"
-    :style="style" :alt="alt"
+    :style="style"
+    :alt="alt"
   >
     <span>{{ initials }}</span>
   </div>
@@ -58,17 +59,20 @@ export default {
 <style lang="scss" scoped>
   .apos-avatar {
     @include type-small;
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    width: 30px;
-    height: 30px;
-    border: 1px solid var(--a-base-9);
-    border-radius: 100%;
-    /* stylelint-disable */
-    line-height: 30px;
-    /* stylelint-enable */
-    color: var(--a-white);
-    text-transform: uppercase;
+
+    & {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 30px;
+      height: 30px;
+      border: 1px solid var(--a-base-9);
+      /* stylelint-disable */
+      border-radius: 100%;
+      line-height: 30px;
+      /* stylelint-enable */
+      color: var(--a-white);
+      text-transform: uppercase;
+    }
   }
 </style>

@@ -12,8 +12,7 @@ export default {
       icons: {},
       // If passing in chosen items from the relationship input, use those
       // as initially checked.
-      checked: Array.isArray(this.chosen) ? this.chosen.map(item => item._id)
-        : [],
+      checked: Array.isArray(this.chosen) ? this.chosen.map(item => item._id) : [],
       checkedDocs: Array.isArray(this.chosen) ? klona(this.chosen) : [],
       // Remember relationship subfield values even if a document
       // is temporarily deselected, easing the user's pain if they
@@ -21,7 +20,8 @@ export default {
       subfields: Object.fromEntries((this.chosen || [])
         .filter(doc => doc._fields)
         .map(doc => [ doc._id, doc._fields ])
-      )
+      ),
+      selectPending: new Set()
     };
   },
   props: {
@@ -80,12 +80,27 @@ export default {
     // of a piece (i.e. AposMediaManager)
     isModified() {
       return this.relationshipIsModified();
+    },
+    manuallyPublished() {
+      return this.moduleOptions.localized && !this.moduleOptions.autopublish;
     }
+  },
+  mounted() {
+    this.docsManagerAddEventHandlers();
+  },
+  unmounted() {
+    this.docsManagerRemoveEventHandlers();
   },
   watch: {
     items: function(newValue) {
       if (newValue.length) {
         this.generateUi();
+      }
+
+      if (this.selectPending.size > 0) {
+        const newChecked = [ ...this.checked, ...this.selectPending ];
+        this.checked = [ ...new Set(newChecked) ];
+        this.selectPending = new Set();
       }
     },
     checkedDocs(after, before) {
@@ -103,30 +118,25 @@ export default {
     }
   },
   methods: {
-    findDocById(docs, id) {
-      return docs.find(p => p._id === id);
-    },
     // It would have been nice for this to be computed, however
     // AposMediaManagerDisplay does not re-render when it is
     // a computed prop rather than a method call in the template.
-    maxReached() {
+    maxReached(checkedCount = this.checked.length) {
       // Reaching max and exceeding it are different things
-      const result = this.relationshipField.max && this.checked.length >= this.relationshipField.max;
-      return result;
+      return this.relationshipField.max && checkedCount >= this.relationshipField.max;
     },
     selectAll() {
       if (!this.checked.length) {
+        const ids = [];
         this.items.forEach((item) => {
-          const relationshipsMaxedOrUnpublished = this.relationshipField &&
-          (this.maxReached() || !item.lastPublishedAt);
-
-          if (relationshipsMaxedOrUnpublished) {
+          const notPublished = this.manuallyPublished && !item.lastPublishedAt;
+          if (this.relationshipField && (this.maxReached(ids.length) || notPublished)) {
             return;
           }
-
-          this.checked.push(item._id);
+          ids.push(item._id);
         });
 
+        this.checked = ids;
         return;
       }
 
@@ -195,10 +205,43 @@ export default {
           return true;
         }
         if (this.relationshipField.schema) {
-          if (detectDocChange(this.relationshipField.schema, this.chosen[i]._fields, this.checkedDocs[i]._fields)) {
+          if (
+            detectDocChange(
+              this.relationshipField.schema,
+              this.chosen[i]._fields,
+              this.checkedDocs[i]._fields
+            )
+          ) {
             return true;
           }
         }
+      }
+    },
+    docsManagerAddEventHandlers() {
+      apos.bus.$on('content-changed', this.docsManagerOnContentChanged);
+    },
+    docsManagerRemoveEventHandlers() {
+      apos.bus.$off('content-changed', this.docsManagerOnContentChanged);
+    },
+    docsManagerOnContentChanged({
+      doc, select, action
+    }) {
+      if (!select) {
+        return;
+      }
+      if ((doc.type === this.moduleName) || (doc.slug.startsWith('/') && (this.moduleName === '@apostrophecms/page'))) {
+        // For now we add it to a set of ids to be selected on the next refresh
+        // of the items array, which works well for newly inserted documents.
+        // In the future this will be replaced with logic that can deal with
+        // selecting any document, but we should implement the "Really Select All,
+        // Not Just This Page" action first.
+        //
+        // We know we always work with drafts in the media manager, so let's adapt
+        // a published doc _id without a fuss
+        this.selectPending.add(doc._id.replace(':published', ':draft'));
+      }
+      if (action === 'archive') {
+        this.checked = this.checked.filter(checkedId => doc._id !== checkedId);
       }
     },
     // update this.checkedDocs based on this.checked. The default
@@ -219,10 +262,14 @@ export default {
       // database.
       this.checked.forEach(id => {
         if (this.checkedDocs.findIndex(doc => doc._id === id) === -1) {
-          this.checkedDocs.push(this.items.find(item => item._id === id));
+          const found = this.items.find(item => item._id === id);
+          found && this.checkedDocs.push(found);
         }
       });
-
+      if (this.allPiecesSelection) {
+        this.allPiecesSelection.isSelected = this.checked.length === this.allPiecesSelection.total ||
+          (this.checked.length && this.maxReached());
+      }
     }
   }
 };

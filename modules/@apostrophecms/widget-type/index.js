@@ -97,11 +97,24 @@ const _ = require('lodash');
 module.exports = {
   cascades: [ 'fields' ],
   options: {
-    neverLoadSelf: true
+    neverLoadSelf: true,
+    initialModal: true,
+    placeholder: false,
+    placeholderClass: 'apos-placeholder',
+    // two-thirds, half or full:
+    width: '',
+    // left or right:
+    origin: 'right'
   },
   init(self) {
+    const badFieldName = Object.keys(self.fields).indexOf('type') !== -1;
+    if (badFieldName) {
+      throw new Error(`The ${self.__meta.name} module contains a forbidden field property name: "type".`);
+    }
 
     self.enableBrowserData();
+
+    self.determineBestAssetUrl('preview');
 
     self.template = self.options.template || 'widget';
 
@@ -161,26 +174,64 @@ module.exports = {
           ...self.getWidgetsBundles(`${widget.type}-widget`)
         };
 
+        let effectiveWidget = widget;
+
+        if (widget.aposPlaceholder === true) {
+          // Do not render widget on preview mode:
+          if (req.query.aposEdit !== '1') {
+            return '';
+          }
+
+          effectiveWidget = { ...widget };
+          self.schema.forEach(field => {
+            if (field.placeholder !== undefined) {
+              effectiveWidget[field.name] = field.placeholder;
+            }
+          });
+        }
+
         return self.render(req, self.template, {
-          widget: widget,
-          options: options,
+          widget: effectiveWidget,
+          options,
           manager: self,
           contextOptions: _with
         });
       },
 
-      getWidgetsBundles (widgetType) {
+      getWidgetsBundles(widgetType) {
         const widget = self.apos.modules[widgetType];
 
         if (!widget) {
           return {};
         }
 
-        return Object.values(widget.__meta.webpack || {})
-          .reduce((acc, config) => {
+        const { rebundleModules } = self.apos.asset;
+
+        const rebundleConfigs = rebundleModules.filter(entry => {
+          const names = widget.__meta?.chain?.map(c => c.name) ?? [ widgetType ];
+          return names.includes(entry.name);
+        });
+
+        const metadata = self.apos.asset.hasBuildModule()
+          ? widget.__meta.build
+          : widget.__meta.webpack;
+
+        return Object.entries(metadata || {})
+          .reduce((acc, [ moduleName, config ]) => {
+            if (self.apos.asset.hasBuildModule()) {
+              config = config?.[self.apos.asset.getBuildModuleAlias()];
+            }
+
+            if (!config || !config.bundles) {
+              return acc;
+            }
             return {
               ...acc,
-              ...config && config.bundles
+              ...self.apos.asset.transformRebundledFor(
+                moduleName,
+                config.bundles,
+                rebundleConfigs
+              )
             };
           }, {});
       },
@@ -267,8 +318,14 @@ module.exports = {
       // this area, including any `defaultOptions` for the widget type.
       //
       // Returns a new, sanitized widget object.
+      //
+      // Intentionally does not accept `ancestors`, widgets must be independent
+      // of parent document properties to ensure they can be copied safely
+      // between documents as long as they accept that widget type, so they
+      // automatically establish a new context for `following`.
 
-      async sanitize(req, input, options) {
+      async sanitize(req, input, options, { fetchRelationships = true } = {}) {
+        const convertOptions = { fetchRelationships };
         if (!input || typeof input !== 'object') {
           // Do not crash
           input = {};
@@ -276,21 +333,27 @@ module.exports = {
         // Make sure we get default values for contextual fields so
         // `by` doesn't go missing for `@apostrophecms/image-widget`
         const output = self.apos.schema.newInstance(self.schema);
-        const schema = self.allowedSchema(req);
         output._id = self.apos.launder.id(input._id) || self.apos.util.generateId();
-        await self.apos.schema.convert(req, schema, input, output);
         output.metaType = 'widget';
         output.type = self.name;
+        output.aposPlaceholder = self.apos.launder.boolean(input.aposPlaceholder);
+        if (!output.aposPlaceholder) {
+          const schema = self.allowedSchema(req);
+          await self.apos.schema.convert(req, schema, input, output, convertOptions);
+        }
         return output;
       },
 
       // Return a new schema containing only fields for which the
-      // current user has the permission specified by the `permission`
-      // property of the schema field, or there is no `permission` property for the field.
+      // current user has the permission specified by the `editPermission`
+      // property of the schema field, or there is no `editPermission`|`viewPermission` property for the field.
 
       allowedSchema(req) {
         return _.filter(self.schema, function (field) {
-          return !field.permission || self.apos.permission.can(req, field.permission.action, field.permission.type);
+          return (!field.editPermission && !field.viewPermission) ||
+            (field.editPermission && self.apos.permission.can(req, field.editPermission.action, field.editPermission.type)) ||
+            (field.viewPermission && self.apos.permission.can(req, field.viewPermission.action, field.viewPermission.type)) ||
+            false;
         });
       },
 
@@ -326,6 +389,7 @@ module.exports = {
           version. The method in 3.x simply returns an empty array.`);
         return [];
       }
+
     };
   },
   extendMethods(self) {
@@ -348,13 +412,15 @@ module.exports = {
           description: self.options.description,
           icon: self.options.icon,
           previewIcon: self.options.previewIcon,
-          previewImage: self.options.previewImage,
+          previewUrl: self.options.previewUrl,
           action: self.action,
-          schema: schema,
+          schema,
           contextual: self.options.contextual,
-          skipInitialModal: self.options.skipInitialModal,
+          placeholderClass: self.options.placeholderClass,
           className: self.options.className,
-          components: self.options.components
+          components: self.options.components,
+          width: self.options.width,
+          origin: self.options.origin
         });
         return result;
       }

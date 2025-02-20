@@ -8,8 +8,8 @@ module.exports = {
   options: {
     quickCreate: false,
     label: 'apostrophe:submittedDraft',
-    pluralLabel: 'Submitted Drafts',
-    canCreate: false,
+    pluralLabel: 'apostrophe:submittedDrafts',
+    showCreate: false,
     showDismissSubmission: true,
     showArchive: false,
     showDiscardDraft: false,
@@ -58,6 +58,36 @@ module.exports = {
         label: 'apostrophe:type'
       }
     }
+  },
+
+  batchOperations: {
+    remove: [ 'publish' ]
+  },
+
+  commands(self) {
+    return {
+      add: {
+        [`${self.__meta.name}:taskbar-manager`]: {
+          type: 'item',
+          label: self.options.label,
+          action: {
+            type: 'admin-menu-click',
+            payload: `${self.__meta.name}:manager`
+          },
+          shortcut: 'T,D'
+        }
+      },
+      modal: {
+        default: {
+          '@apostrophecms/command-menu:taskbar-manager': {
+            label: 'apostrophe:commandMenuTaskbar',
+            commands: [
+              `${self.__meta.name}:manager`
+            ]
+          }
+        }
+      }
+    };
   },
 
   handlers(self) {
@@ -111,7 +141,7 @@ module.exports = {
           {
             component: 'AposSubmittedDraftIcon',
             contextUtility: true,
-            tooltip: 'Submitted Drafts'
+            tooltip: 'apostrophe:submittedDrafts'
           }
         );
       }

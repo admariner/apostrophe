@@ -6,23 +6,26 @@
   >
     <AposContextMenuTip
       v-if="hasTip"
+      class="apos-context-menu__tip"
       :align="tipAlignment"
-      :origin="menuOrigin"
-      x-placement="bottom"
+      :x-placement="placementSide"
+      @set-arrow="emitSetArrow"
     />
     <div class="apos-context-menu__pane">
       <slot>
         <ul
           v-if="menu"
-          class="apos-context-menu__items" role="menu"
+          class="apos-context-menu__items"
+          role="menu"
         >
           <AposContextMenuItem
             v-for="item in menu"
             :key="item.action"
             :data-apos-test-context-menu-item="item.action"
             :menu-item="item"
-            @clicked="menuItemClicked"
+            :is-active="item.name === activeItem"
             :open="isOpen"
+            @clicked="menuItemClicked"
           />
         </ul>
       </slot>
@@ -30,71 +33,75 @@
   </div>
 </template>
 
-<script>
+<script setup>
+import {
+  computed
+} from 'vue';
 
-export default {
-  name: 'AposContextMenuDialog',
-  props: {
-    menuPlacement: {
-      type: String,
-      required: true
-    },
-    menu: {
-      type: Array,
-      default: null
-    },
-    classList: {
-      type: String,
-      default: ''
-    },
-    isOpen: {
-      type: Boolean,
-      default: false
-    },
-    modifiers: {
-      type: Array,
-      default() {
-        return [];
-      }
-    },
-    hasTip: {
-      type: Boolean,
-      default: true
+const props = defineProps({
+  menuPlacement: {
+    type: String,
+    required: true
+  },
+  menu: {
+    type: Array,
+    default: null
+  },
+  classList: {
+    type: String,
+    default: ''
+  },
+  isOpen: {
+    type: Boolean,
+    default: false
+  },
+  modifiers: {
+    type: Array,
+    default() {
+      return [];
     }
   },
-  emits: [ 'item-clicked' ],
-  data() {
-    return {
-    };
+  hasTip: {
+    type: Boolean,
+    default: true
   },
-  computed: {
-    menuPositions () {
-      return this.menuPlacement.split('-');
-    },
-    menuOrigin() {
-      return this.menuPositions[0];
-    },
-    tipAlignment() {
-      if (!this.menuPositions[1]) {
-        return 'center';
-      } else {
-        return this.menuPositions[1];
-      }
-    },
-    classes() {
-      const classes = this.classList.split(' ');
-      this.modifiers.forEach(c => {
-        classes.push(`apos-context-menu__dialog--${c}`);
-      });
-      return classes.join(' ');
-    }
-  },
-  methods: {
-    menuItemClicked(action) {
-      this.$emit('item-clicked', action);
-    }
+  activeItem: {
+    type: String,
+    default: null
   }
-};
+});
+
+const emit = defineEmits([ 'item-clicked', 'set-arrow' ]);
+
+const menuPositions = computed(() => {
+  return props.menuPlacement.split('-');
+});
+
+const placementSide = computed(() => {
+  return menuPositions.value[0];
+});
+
+const tipAlignment = computed(() => {
+  return !menuPositions.value[1]
+    ? 'center'
+    : menuPositions.value[1];
+});
+
+const classes = computed(() => {
+  const classes = props.classList.split(' ');
+  props.modifiers.forEach(c => {
+    classes.push(`apos-context-menu__dialog--${c}`);
+  });
+  return classes.join(' ');
+});
+
+function menuItemClicked(action) {
+  emit('item-clicked', action);
+}
+
+function emitSetArrow(arrowEl) {
+  emit('set-arrow', arrowEl);
+}
 </script>
 
 <style lang="scss">
@@ -111,7 +118,7 @@ export default {
 .apos-context-menu__dialog {
   display: inline-block;
   color: var(--a-text-primary);
-  transition: scale 0.15s ease, translatey 0.15s ease;
+  transition: scale 200ms ease, translatey 200ms ease;
 }
 
 .apos-context-menu__inner {
@@ -123,29 +130,45 @@ export default {
 
 .apos-context-menu__pane {
   @include type-base;
-  padding: 20px;
-  border: 1px solid var(--a-base-8);
-  border-radius: var(--a-border-radius);
-  box-shadow: var(--a-box-shadow);
-  background-color: var(--a-background-primary);
+
+  & {
+    padding: 20px;
+    border: 1px solid var(--a-base-8);
+    border-radius: var(--a-border-radius);
+    box-shadow: var(--a-box-shadow);
+    background-color: var(--a-background-primary);
+  }
 }
 
 .apos-context-menu__items {
   @include apos-list-reset();
-  display: inline-block;
-  list-style-type: none;
-  width: max-content;
-  margin: none;
-  margin-block-start: 0;
-  margin-block-end: 0;
-  padding: 10px 0;
+
+  & {
+    display: inline-block;
+    list-style-type: none;
+    width: max-content;
+    margin: none;
+    margin-block: 0;
+    padding: 10px 0;
+  }
 }
 
-.apos-context-menu__dialog ::v-deep .apos-schema .apos-field {
+.apos-context-menu__dialog :deep(.apos-schema .apos-field) {
   margin-bottom: 20px;
+
   .apos-field__help {
     margin-top: 5px;
   }
 }
 
+.apos-context-menu__tip[x-placement^='bottom'] {
+  top: -10px;
+  bottom: auto;
+}
+
+.apos-context-menu__tip[x-placement^='top'] {
+  top: auto;
+  bottom: -10px;
+  transform: rotate(180deg);
+}
 </style>

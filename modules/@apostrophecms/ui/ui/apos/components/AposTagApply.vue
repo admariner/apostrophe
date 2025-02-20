@@ -1,55 +1,63 @@
 <template>
   <AposContextMenu
-    @open="open = $event"
     menu-placement="bottom-end"
+    @open="open = $event"
   >
     <div class="apos-apply-tag-menu__inner">
       <AposInputString
-        @input="updateSearchInput"
+        ref="textInput"
+        :field="searchField"
+        :model-value="searchValue"
+        :status="searchStatus"
+        @update:model-value="updateSearchInput"
         @return="create"
-        :field="searchField" :value="searchValue"
-        :status="searchStatus" ref="textInput"
       />
       <div class="apos-apply-tag__create">
         <AposButton
-          @click="create"
           :label="createLabel"
           type="quiet"
           :disabled="disabledCreate"
           :disable-focus="!open"
+          @click="create"
         />
       </div>
       <transition name="fade">
-        <ol v-if="searchTags.length && !creating" class="apos-apply-tag-menu__tags">
-          <li
-            class="apos-apply-tag-menu__tag" v-for="tag in searchTags"
-            :key="`${keyPrefix}-${tag.slug}`"
-          >
-            <AposCheckbox
-              v-if="checkboxes[tag.slug]"
-              :field="checkboxes[tag.slug].field"
-              :status="checkboxes[tag.slug].status"
-              :choice="checkboxes[tag.slug].choice"
-              v-model="checked"
-              @updated="updateTag"
-              :disable-focus="!open"
-            />
-          </li>
-        </ol>
-        <div v-if="(!searchTags.length && myTags.length) && !creating" class="apos-apply-tag-menu__empty">
-          <p class="apos-apply-tag-menu__empty-message">
-            We couldn't find any matching tags. Perhaps
-            <AposButton
-              @click="create"
-              :label="`create ${searchInputValue} ?`"
-              type="quiet"
-              :disabled="disabledCreate"
-              :disable-focus="!open"
-            />
-          </p>
-          <span class="apos-apply-tag-menu__empty-icon">
-            🌾
-          </span>
+        <div>
+          <ol v-if="searchTags.length && !creating" class="apos-apply-tag-menu__tags">
+            <li
+              v-for="tag in searchTags"
+              :key="`${keyPrefix}-${tag.slug}`"
+              class="apos-apply-tag-menu__tag"
+            >
+              <AposCheckbox
+                v-if="checkboxes[tag.slug]"
+                v-model="checked"
+                :field="checkboxes[tag.slug].field"
+                :status="checkboxes[tag.slug].status"
+                :choice="checkboxes[tag.slug].choice"
+                :disable-focus="!open"
+                @updated="updateTag"
+              />
+            </li>
+          </ol>
+          <div v-if="(!searchTags.length && myTags.length) && !creating" class="apos-apply-tag-menu__empty">
+            <p class="apos-apply-tag-menu__empty-message">
+              {{ $t('apostrophe:tagNoTagsFoundPerhaps') }}
+              <AposButton
+                :label="{
+                  key: 'apostrophe:tagNoTagsFoundCreateOne',
+                  tag: searchInputValue
+                }"
+                type="quiet"
+                :disabled="disabledCreate"
+                :disable-focus="!open"
+                @click="create"
+              />
+            </p>
+            <span class="apos-apply-tag-menu__empty-icon">
+              🌾
+            </span>
+          </div>
         </div>
       </transition>
     </div>
@@ -57,7 +65,7 @@
 </template>
 
 <script>
-import cuid from 'cuid';
+import { createId } from '@paralleldrive/cuid2';
 
 export default {
   props: {
@@ -65,7 +73,7 @@ export default {
       type: Object,
       default() {
         return {
-          label: 'Add Tag',
+          label: 'apostrophe:tagAddTag',
           action: 'add-tag'
         };
       }
@@ -97,7 +105,7 @@ export default {
       myTags: [ ...this.tags ],
       checked: [],
       searchInputValue: '',
-      keyPrefix: `key-${cuid()}`, // used to keep checkboxes in sync w state
+      keyPrefix: `key-${createId()}`, // used to keep checkboxes in sync w state
       origin: 'below',
       open: false,
       button: {
@@ -138,17 +146,20 @@ export default {
     // Generate the button label.
     createLabel() {
       if (this.searchInputValue.length) {
-        return `Create tag "${this.searchInputValue}"`;
+        return {
+          key: 'apostrophe:tagCreateTag',
+          tag: this.searchInputValue
+        };
       } else {
-        return 'Create new tag';
+        return 'apostrophe:tagCreateNewTag';
       }
     },
     // Generate the field object for the search field.
     searchField() {
       return {
         name: 'tagSearch',
-        label: 'Apply Tags',
-        placeholder: 'Tags...',
+        label: 'apostrophe:tagSearchApplyTags',
+        placeholder: 'apostrophe:tagSearchPlaceholder',
         help: 'apostrophe:findOrAddTag',
         icon: (!this.searchTags || !this.searchTags.length) ? 'pencil-icon' : 'magnify-icon',
         disableFocus: !this.open
@@ -173,7 +184,7 @@ export default {
 
       if (!this.searchInputValue || !this.searchInputValue.length) {
         this.creating = true;
-        this.searchValue.data = 'New Tag';
+        this.searchValue.data = this.$t('apostrophe:tagNewTag');
         this.$refs.textInput.$el.querySelector('input').focus();
         this.$nextTick(() => {
           this.$refs.textInput.$el.querySelector('input').select();
@@ -223,7 +234,7 @@ export default {
         }
       }
       // Force refresh the checkboxes.
-      this.keyPrefix = `key-${cuid()}`;
+      this.keyPrefix = `key-${createId()}`;
 
       // TODO: This should probably have an "Apply" or "Save" button to confirm
       // before running emitting the updates.
@@ -305,12 +316,15 @@ export default {
 
   .apos-apply-tag-menu__tags {
     @include apos-list-reset();
-    max-height: 160px;
-    overflow-y: auto;
-    margin-top: 15px;
-    // Negative margin/padding below is for the checkbox focus state.
-    margin-left: -10px;
-    padding-left: 10px;
+
+    & {
+      max-height: 160px;
+      overflow-y: auto;
+      margin-top: 15px;
+      // Negative margin/padding below is for the checkbox focus state.
+      margin-left: -10px;
+      padding-left: 10px;
+    }
   }
 
   .apos-apply-tag-menu__tag {
@@ -319,16 +333,19 @@ export default {
 
   .apos-apply-tag-menu__empty {
     display: flex;
-    align-items: center;
     flex-direction: column;
+    align-items: center;
     padding: 40px 0 20px;
   }
 
   .apos-apply-tag-menu__empty-message {
     @include type-base;
-    margin-bottom: 20px;
-    max-width: 240px;
-    text-align: center;
+
+    & {
+      margin-bottom: 20px;
+      max-width: 240px;
+      text-align: center;
+    }
   }
 
   .apos-apply-tag-menu__empty-icon {
@@ -339,11 +356,14 @@ export default {
     // Variable sizes are less important for icons.
     /* stylelint-disable-next-line scale-unlimited/declaration-strict-value */
     @include type-title;
-    margin: 0;
+
+    & {
+      margin: 0;
+    }
   }
 
   .fade-enter-active, .fade-leave-active {
-    transition: all 0.5s;
+    transition: all 500ms;
   }
 
   .fade-enter, .fade-leave-to {

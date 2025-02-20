@@ -67,7 +67,9 @@ module.exports = {
       //
       // If `options.alwaysIframe` is true, the result is a simple
       // iframe of the URL. If `options.iframeHeight` is set, the iframe
-      // has that height in pixels, otherwise it is left to CSS.
+      // has that height in pixels, otherwise it is left to CSS. These iframe-related
+      // options are not used in core Apostrophe and remain available to project-level
+      // application code for backwards compatibility purposes only.
       //
       // The `options` object is passed on to `oembetter.fetch`.
       //
@@ -95,7 +97,7 @@ module.exports = {
         // Tolerant URL handling
         url = self.apos.launder.url(url, null, true);
         if (!url) {
-          throw self.apos.error('invalid', 'Video URL invalid');
+          throw self.apos.error('invalid', req.t('apostrophe:oembedVideoUrlInvalid'));
         }
         const key = url + ':' + JSON.stringify(options);
         let response = await self.apos.cache.get('@apostrophecms/oembed', key);
@@ -108,7 +110,7 @@ module.exports = {
           try {
             response = await require('util').promisify(self.oembetter.fetch)(url, options);
           } catch (err) {
-            throw self.apos.error('invalid', 'Video URL invalid');
+            throw self.apos.error('invalid', req.t('apostrophe:oembedVideoUrlInvalid'));
           }
         }
         // Make non-secure URLs protocol relative and
@@ -127,6 +129,9 @@ module.exports = {
         await self.apos.cache.set('@apostrophecms/oembed', key, response, self.options.cacheLifetime);
         return response;
       },
+      // Not currently used. Present for backwards compatibility
+      // in the event that application code used it directly.
+      //
       // Given a URL, return an oembed response for it
       // which just iframes the URL given. Fetches the page
       // first to get the title property.
@@ -158,9 +163,9 @@ module.exports = {
         }
         html = html.replace('STYLE', style);
         return {
-          title: title,
+          title,
           type: 'rich',
-          html: html
+          html
         };
       },
       // Returns browser-side javascript to load a given
@@ -219,8 +224,10 @@ module.exports = {
         async query(req) {
           const url = self.apos.launder.string(req.query.url);
           const options = {
-            alwaysIframe: self.apos.launder.boolean(req.query.alwaysIframe),
-            iframeHeight: self.apos.launder.integer(req.query.iframeHeight)
+            // This feature is no longer available via the
+            // oembed proxy because it posed an SSRF risk and
+            // was never used in core Apostrophe widgets
+            alwaysIframe: false
           };
 
           const result = await self.query(req, url, options);

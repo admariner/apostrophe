@@ -1,24 +1,39 @@
 <template>
   <div :class="classes">
     <template v-if="contextBarActive">
-      <TheAposContextUndoRedo
-        :v-if="editMode"
-        :patches-since-loaded="patchesSinceLoaded"
-        :undone="undone"
-        @undo="undo"
-        @redo="redo"
-        :retrying="retrying"
-        :editing="editing"
-        :saving="saving"
-        :saved="saved"
-      />
+      <div class="apos-admin-bar__control-group">
+        <TheAposContextUndoRedo
+          :v-if="editMode"
+          :can-undo="canUndo"
+          :can-redo="canRedo"
+          @undo="undo"
+          @redo="redo"
+        />
+        <TheAposContextBreakpointPreviewMode
+          v-if="isBreakpointPreviewModeEnabled"
+          :screens="breakpointPreviewModeScreens"
+          :resizable="breakpointPreviewModeResizable"
+          @switch-breakpoint-preview-mode="addContextLabel"
+          @reset-breakpoint-preview-mode="removeContextLabel"
+        />
+        <TheAposSavingIndicator
+          :key="'status'"
+          :retrying="retrying"
+          :editing="editing"
+          :saving="saving"
+          :saved="saved"
+        />
+      </div>
+
       <TheAposContextTitle
         v-if="!hasCustomUi"
+        class="apos-admin-bar__control-group"
         :context="context"
         :draft-mode="draftMode"
         @switch-draft-mode="switchDraftMode"
       />
       <TheAposContextModeAndSettings
+        class="apos-admin-bar__control-group"
         :context="context"
         :published="published"
         :edit-mode="editMode"
@@ -35,14 +50,14 @@
 
 <script>
 import { klona } from 'klona';
-import cuid from 'cuid';
+import { createId } from '@paralleldrive/cuid2';
 import AposPublishMixin from 'Modules/@apostrophecms/ui/mixins/AposPublishMixin';
 import AposAdvisoryLockMixin from 'Modules/@apostrophecms/ui/mixins/AposAdvisoryLockMixin';
 
 export default {
   name: 'TheAposContextBar',
   mixins: [ AposPublishMixin, AposAdvisoryLockMixin ],
-  emits: [ 'mounted' ],
+  emits: [ 'visibility-changed' ],
   data() {
     const query = apos.http.parseQuery(location.search);
     // If the URL references a draft, go into draft mode but then clean up the URL
@@ -79,10 +94,11 @@ export default {
   },
   computed: {
     contextBarActive() {
-      return window.apos.adminBar.contextBar && this.canEdit;
+      return window.apos.adminBar.contextBar && (this.canEdit || this.moduleOptions.canLocalize);
     },
     canEdit() {
-      return this.context._edit || ((this.context.aposLocale && this.context.aposLocale.endsWith(':published')) && this.draftIsEditable);
+      return this.context._edit || ((this.context.aposLocale && this.context.aposLocale.endsWith(':published')) &&
+        this.draftIsEditable);
     },
     classes() {
       if (!this.contextBarActive) {
@@ -98,7 +114,7 @@ export default {
       return !!this.patchesSinceSave.length;
     },
     canPublish() {
-      return apos.modules[this.context.type].canPublish;
+      return this.context._publish || apos.modules[this.context.type].canPublish;
     },
     readyToPublish() {
       if (this.canPublish) {
@@ -122,11 +138,34 @@ export default {
     },
     customPublishLabel() {
       return (this.hasCustomUi && apos.modules[this.context.type].publishLabel) || null;
+    },
+    canUndo() {
+      return this.patchesSinceLoaded.length > 0;
+    },
+    canRedo() {
+      return this.undone.length > 0;
+    },
+    autopublish() {
+      return this.context.autopublish ?? this.moduleOptions.autopublish;
+    },
+    isBreakpointPreviewModeEnabled() {
+      return this.moduleOptions.breakpointPreviewMode.enable || false;
+    },
+    breakpointPreviewModeScreens() {
+      return this.moduleOptions.breakpointPreviewMode.screens || {};
+    },
+    breakpointPreviewModeResizable() {
+      return this.moduleOptions.breakpointPreviewMode.resizable || false;
     }
   },
   watch: {
     editMode(newVal) {
       window.apos.adminBar.editMode = newVal;
+    },
+    contextBarActive() {
+      this.$nextTick(() => {
+        this.$emit('visibility-changed');
+      });
     }
   },
   async mounted() {
@@ -144,7 +183,7 @@ export default {
     // sessionStorage because it is deliberately browser-tab specific
     let tabId = sessionStorage.getItem('aposTabId');
     if (!tabId) {
-      tabId = cuid();
+      tabId = createId();
       sessionStorage.setItem('aposTabId', tabId);
     }
     window.apos.adminBar.tabId = tabId;
@@ -163,9 +202,6 @@ export default {
     await this.updateDraftIsEditable();
     this.rememberLastBaseContext();
     this.published = await this.getPublished();
-    this.$nextTick(() => {
-      this.$emit('mounted');
-    });
 
     apos.util.onReadyAndRefresh(() => {
       if (window.apos.adminBar.scrollPosition) {
@@ -285,7 +321,7 @@ export default {
         }, 1100);
       }
     },
-    async onPublish(e) {
+    async onPublish() {
       if (!this.canPublish) {
         const submitted = await this.submitDraft(this.context);
         if (submitted) {
@@ -371,6 +407,10 @@ export default {
       mode = mode || this.draftMode;
       locale = locale || apos.i18n.locale;
       doc = doc || this.context;
+      if (!doc) {
+        return;
+      }
+
       if ((mode === this.draftMode) && (locale === apos.i18n.locale)) {
         if ((this.context._id === doc._id) && (!this.urlDiffers(doc._url))) {
           return;
@@ -462,7 +502,6 @@ export default {
       }
     },
     async onContentChanged(e) {
-
       if (
         (e.doc && (e.doc._id === this.context._id)) ||
         (e.docIds && e.docIds.includes(this.context._id))
@@ -478,9 +517,16 @@ export default {
           });
         }
       }
-      await this.refresh({
-        scrollcheck: e.action === 'history'
-      });
+
+      // Check that refresh hasn't been disabled for this page type
+      const contextOptions = this.context
+        ? apos.modules[this.context.type]
+        : { contentChangedRefresh: true };
+      if (!e.localeSwitched && contextOptions.contentChangedRefresh) {
+        await this.refresh({
+          scrollcheck: e.action === 'history'
+        });
+      }
     },
     async switchEditMode(editing) {
       this.editMode = editing;
@@ -499,7 +545,39 @@ export default {
       }
     },
     async refresh(options = {}) {
-      let url = window.location.href;
+      const refreshable = document.querySelector('[data-apos-refreshable]');
+      if (options.scrollcheck) {
+        window.apos.adminBar.scrollPosition = {
+          x: window.scrollX,
+          y: window.scrollY
+        };
+      }
+
+      if (!refreshable) {
+        apos.bus.$emit('refreshed');
+        this.rememberLastBaseContext();
+        return;
+      }
+
+      const { action } = window.apos.modules[this.context.type];
+      let doc;
+      try {
+        doc = await apos.http.get(`${action}/${this.context.aposDocId}`, {
+          qs: {
+            aposMode: this.draftMode,
+            project: { _url: 1 }
+          }
+        });
+      } catch (err) {
+        return;
+      }
+
+      if (this.urlDiffers(doc._url)) {
+        // Slug changed, change browser URL to reflect the actual url of the doc
+        doc._url = doc._url + (window.location.search || '');
+        history.replaceState(null, '', doc._url);
+      }
+
       const qs = {
         ...apos.http.parseQuery(window.location.search),
         aposRefresh: '1',
@@ -508,48 +586,40 @@ export default {
           aposEdit: '1'
         } : {})
       };
-      url = apos.http.addQueryToUrl(url, qs);
-      const content = await apos.http.get(url, {
-        qs,
-        headers: {
-          'Cache-Control': 'no-cache'
-        },
-        draft: true,
-        busy: true
-      });
-      const refreshable = document.querySelector('[data-apos-refreshable]');
 
-      if (options.scrollcheck) {
-        window.apos.adminBar.scrollPosition = {
-          x: window.scrollX,
-          y: window.scrollY
-        };
+      if (doc._url) {
+        refreshable.innerHTML = await apos.http.get(doc._url, {
+          qs,
+          headers: {
+            'Cache-Control': 'no-cache'
+          },
+          draft: true,
+          busy: true,
+          prefix: false
+        });
       }
 
-      if (refreshable) {
-        refreshable.innerHTML = content;
-        if (this.editMode && (!this.original)) {
-          // the first time we enter edit mode on the page, we need to
-          // establish a baseline for undo/redo. Use our
-          // "@ notation" PATCH feature. Sort the areas by DOM depth
-          // to ensure parents patch before children
-          this.original = {};
-          const els = Array.from(document.querySelectorAll('[data-apos-area-newly-editable]')).filter(el => el.getAttribute('data-doc-id') === this.context._id);
-          els.sort((a, b) => {
-            const da = depth(a);
-            const db = depth(b);
-            if (da < db) {
-              return -1;
-            } else if (db > da) {
-              return 1;
-            } else {
-              return 0;
-            }
-          });
-          for (const el of els) {
-            const data = JSON.parse(el.getAttribute('data'));
-            this.original[`@${data._id}`] = data;
+      if (this.editMode && (!this.original)) {
+        // the first time we enter edit mode on the page, we need to
+        // establish a baseline for undo/redo. Use our
+        // "@ notation" PATCH feature. Sort the areas by DOM depth
+        // to ensure parents patch before children
+        this.original = {};
+        const els = Array.from(document.querySelectorAll('[data-apos-area-newly-editable]')).filter(el => el.getAttribute('data-doc-id') === this.context._id);
+        els.sort((a, b) => {
+          const da = depth(a);
+          const db = depth(b);
+          if (da < db) {
+            return -1;
+          } else if (db > da) {
+            return 1;
+          } else {
+            return 0;
           }
+        });
+        for (const el of els) {
+          const data = JSON.parse(el.getAttribute('data'));
+          this.original[`@${data._id}`] = data;
         }
       }
       apos.bus.$emit('refreshed');
@@ -569,7 +639,7 @@ export default {
           body: {},
           busy: true
         });
-        apos.notify('apostrophe:restoredPrevious', {
+        await apos.notify('apostrophe:restoredPrevious', {
           type: 'success',
           dismiss: true
         });
@@ -598,12 +668,16 @@ export default {
       }
     },
     async undo() {
-      this.undone.push(this.patchesSinceLoaded.pop());
-      await this.refreshAfterHistoryChange('apostrophe:undoFailed');
+      if (this.canUndo) {
+        this.undone.push(this.patchesSinceLoaded.pop());
+        await this.refreshAfterHistoryChange('apostrophe:undoFailed');
+      }
     },
     async redo() {
-      this.patchesSinceLoaded.push(this.undone.pop());
-      await this.refreshAfterHistoryChange('apostrophe:redoFailed');
+      if (this.canRedo) {
+        this.patchesSinceLoaded.push(this.undone.pop());
+        await this.refreshAfterHistoryChange('apostrophe:redoFailed');
+      }
     },
     async refreshAfterHistoryChange(errorMessageKey) {
       this.saving = true;
@@ -647,13 +721,14 @@ export default {
       }
     },
     urlDiffers(url) {
-      // URL might or might not include hostname part
-      url = url.replace(/^https?:\/\/.*?\//, '/');
-      if (url === (window.location.pathname + (window.location.search || ''))) {
+      if (!url) {
         return false;
-      } else {
-        return true;
       }
+
+      const normalizedUrl = url.replace(/^https?:\/\/[^/]+\//, '/');
+      const currentPageUrl = window.location.pathname + window.location.search;
+
+      return normalizedUrl !== currentPageUrl;
     },
     lockNotAvailable() {
       if (this.contextStack.length) {
@@ -669,28 +744,36 @@ export default {
     async updateDraftIsEditable() {
       if (this.context.aposLocale && this.context.aposLocale.endsWith('published') && !this.context._edit) {
         // A contributor might be able to edit the draft
-        const draftContext = await apos.http.get(`${this.action}/${this.context._id}`, {
-          busy: true,
-          qs: {
-            aposMode: 'draft',
-            aposLocale: this.context.aposLocale.split(':')[0]
-          }
-        });
-        this.draftIsEditable = draftContext && draftContext._edit;
+        try {
+          const draftContext = await apos.http.get(`${this.action}/${this.context._id}`, {
+            busy: true,
+            qs: {
+              aposMode: 'draft',
+              aposLocale: this.context.aposLocale.split(':')[0]
+            }
+          });
+          this.draftIsEditable = draftContext && draftContext._edit;
+        } catch (e) {
+          console.error(e);
+        }
       }
     },
     async getPublished() {
-      const moduleOptions = window.apos.modules[this.context.type];
-      const manuallyPublished = moduleOptions.localized && !moduleOptions.autopublish;
+      const moduleOptions = window.apos.modules?.[this.context.type];
+      const manuallyPublished = moduleOptions?.localized && !this.autopublish;
       if (manuallyPublished && this.context.lastPublishedAt) {
         const action = window.apos.modules[this.context.type].action;
-        const doc = await apos.http.get(`${action}/${this.context._id}`, {
-          busy: true,
-          qs: {
-            aposMode: 'published'
-          }
-        });
-        return doc;
+        try {
+          const doc = await apos.http.get(`${action}/${this.context._id}`, {
+            busy: true,
+            qs: {
+              aposMode: 'published'
+            }
+          });
+          return doc;
+        } catch (error) {
+          console.error(error);
+        }
       }
       return null;
     },
@@ -700,6 +783,15 @@ export default {
         draftMode: this.draftMode,
         editMode: this.editMode
       }));
+    },
+    addContextLabel({
+      label
+    }) {
+      document.querySelector('[data-apos-context-label]')
+        ?.replaceChildren(document.createTextNode(this.$t(label)));
+    },
+    removeContextLabel() {
+      document.querySelector('[data-apos-context-label]')?.replaceChildren();
     }
   }
 };
@@ -714,8 +806,19 @@ function depth(el) {
 }
 </script>
 <style lang="scss" scoped>
-.apos-admin-bar__row--utils {
+.apos-admin-bar__row--utils,
+.apos-admin-bar__control-group {
   display: flex;
   align-items: center;
+}
+
+.apos-admin-bar__control-group {
+  flex: 1;
+  height: 100%;
+
+  .apos-admin-bar__control-set {
+    align-items: center;
+    width: auto;
+  }
 }
 </style>

@@ -2,21 +2,15 @@ const t = require('../test-lib/test.js');
 const assert = require('assert');
 const _ = require('lodash');
 
-let apos;
-let homeId;
-const apiKey = 'this is a test api key';
-
 describe('Pages', function() {
+  let apos;
+  let home;
+  let homeId;
+  const apiKey = 'this is a test api key';
 
   this.timeout(t.timeout);
 
-  after(function() {
-    return t.destroy(apos);
-  });
-
-  // EXISTENCE
-
-  it('should be a property of the apos object', async function() {
+  before(async function() {
     apos = await t.create({
       root: module,
       modules: {
@@ -54,54 +48,9 @@ describe('Pages', function() {
       }
     });
 
-    assert(apos.page.__meta.name === '@apostrophecms/page');
-  });
-
-  // SETUP
-
-  it('should make sure all of the expected indexes are configured', async function() {
-    const expectedIndexes = [ 'path' ];
-    const actualIndexes = [];
-
-    const info = await apos.doc.db.indexInformation();
-
-    // Extract the actual index info we care about
-    _.each(info, function(index) {
-      actualIndexes.push(index[0][0]);
-    });
-
-    // Now make sure everything in expectedIndexes is in actualIndexes
-    _.each(expectedIndexes, function(index) {
-      assert(_.includes(actualIndexes, index));
-    });
-  });
-
-  it('parked homepage exists', async function() {
-    const home = await apos.page.find(apos.task.getAnonReq(), { level: 0 }).toObject();
-
-    assert(home);
+    home = await apos.page.find(apos.task.getAnonReq(), { level: 0 }).toObject();
     homeId = home._id;
-    assert(home.slug === '/');
-    assert(`${home.path}:en:published` === home._id);
-    assert(home.type === '@apostrophecms/home-page');
-    assert(home.parked);
-    assert(home.visibility === 'public');
-  });
 
-  it('parked archive page exists', async function() {
-    const archive = await apos.page.find(apos.task.getReq(), { slug: '/archive' }).archived(null).toObject();
-    assert(archive);
-    assert(archive.slug === '/archive');
-    assert(archive.path === `${homeId.replace(':en:published', '')}/${archive._id.replace(':en:published', '')}`);
-    assert(archive.type === '@apostrophecms/archive-page');
-    assert(archive.parked);
-    // Verify that clonePermanent did its
-    // job and removed properties not meant
-    // to be stored in mongodb
-    assert(!archive._children);
-  });
-
-  it('should be able to use db to insert documents', async function() {
     const testItems = [
       {
         _id: 'parent:en:published',
@@ -172,9 +121,11 @@ describe('Pages', function() {
       }
     ];
     // Insert draft versions too to match the A3 data model
+    const lastPublishedAt = new Date();
     const draftItems = await apos.doc.db.insertMany(testItems.map(item => ({
       ...item,
       aposLocale: item.aposLocale.replace(':published', ':draft'),
+      lastPublishedAt,
       _id: item._id.replace(':published', ':draft')
     })));
     assert(draftItems.result.ok === 1);
@@ -184,6 +135,57 @@ describe('Pages', function() {
 
     assert(items.result.ok === 1);
     assert(items.insertedCount === 6);
+  });
+
+  after(function() {
+    return t.destroy(apos);
+  });
+
+  // EXISTENCE
+
+  it('should be a property of the apos object', async function() {
+    assert(apos.page.__meta.name === '@apostrophecms/page');
+  });
+
+  // SETUP
+
+  it('should make sure all of the expected indexes are configured', async function() {
+    const expectedIndexes = [ 'path' ];
+    const actualIndexes = [];
+
+    const info = await apos.doc.db.indexInformation();
+
+    // Extract the actual index info we care about
+    _.each(info, function(index) {
+      actualIndexes.push(index[0][0]);
+    });
+
+    // Now make sure everything in expectedIndexes is in actualIndexes
+    _.each(expectedIndexes, function(index) {
+      assert(_.includes(actualIndexes, index));
+    });
+  });
+
+  it('parked homepage exists', async function() {
+    assert(home);
+    assert(home.slug === '/');
+    assert(`${home.path}:en:published` === home._id);
+    assert(home.type === '@apostrophecms/home-page');
+    assert(home.parked);
+    assert(home.visibility === 'public');
+  });
+
+  it('parked archive page exists', async function() {
+    const archive = await apos.page.find(apos.task.getReq(), { slug: '/archive' }).archived(null).toObject();
+    assert(archive);
+    assert(archive.slug === '/archive');
+    assert(archive.path === `${homeId.replace(':en:published', '')}/${archive._id.replace(':en:published', '')}`);
+    assert(archive.type === '@apostrophecms/archive-page');
+    assert(archive.parked);
+    // Verify that clonePermanent did its
+    // job and removed properties not meant
+    // to be stored in mongodb
+    assert(!archive._children);
   });
 
   // FINDING
@@ -213,6 +215,24 @@ describe('Pages', function() {
     assert(page);
     // It should have a path of /parent/child
     assert(page.path === `${homeId.replace(':en:published', '')}/parent/child`);
+  });
+
+  it('should convert an uppercase URL to its lowercase version', async function() {
+    const response = await apos.http.get('/PArent/cHild', {
+      fullResponse: true
+    });
+    assert(response.body.match(/URL: \/parent\/child/));
+  });
+
+  it('should NOT convert an uppercase URL if redirectFailedUpperCaseUrls is false', async function() {
+    apos.page.options.redirectFailedUpperCaseUrls = false;
+    try {
+      await apos.http.get('/PArent/cHild', {
+        fullResponse: true
+      });
+    } catch (error) {
+      assert(error.status === 404);
+    }
   });
 
   it('should be able to include the ancestors of a page', async function() {
@@ -258,6 +278,55 @@ describe('Pages', function() {
     assert.strictEqual(page._ancestors[1]._children[0].path, `${homeId.replace(':en:published', '')}/parent/child`);
     // The second ancestor's child should have a path '/parent/sibling'
     assert.strictEqual(page._ancestors[1]._children[1].path, `${homeId.replace(':en:published', '')}/parent/sibling`);
+  });
+
+  it('should return pages from a specific type when type is provided', async function () {
+    const result = await apos.http.get('/api/v1/@apostrophecms/page', {
+      qs: {
+        type: 'test-page'
+      }
+    });
+
+    const expected = {
+      results: [
+        {
+          type: 'test-page',
+          slug: '/parent'
+        },
+        {
+          type: 'test-page',
+          slug: '/parent/child'
+        },
+        {
+          type: 'test-page',
+          slug: '/parent/child/grandchild'
+        },
+        {
+          type: 'test-page',
+          slug: '/parent/sibling'
+        },
+        {
+          type: 'test-page',
+          slug: '/parent/sibling/cousin'
+        },
+        {
+          type: 'test-page',
+          slug: '/another-parent'
+        }
+      ],
+      pages: 1,
+      currentPage: 1
+    };
+
+    const mappedResult = result.results.map(({ type, slug }) => ({
+      type,
+      slug
+    }));
+
+    assert.deepEqual({
+      ...result,
+      results: mappedResult
+    }, expected);
   });
 
   // INSERTING
@@ -317,6 +386,26 @@ describe('Pages', function() {
     assert(subPage.level === 3);
   });
 
+  it('is able to insert a draft subpage from published parent id', async function() {
+
+    const subPageInfo = {
+      slug: '/parent/sub-draft-page',
+      visibility: 'public',
+      type: 'test-page',
+      title: 'Sub Draft Page'
+    };
+
+    const subPage = await apos.page.insert(
+      apos.task.getReq({ mode: 'draft' }),
+      // ensure it ends with ":published"
+      newPage._id.replace(':draft', ':published'),
+      'lastChild',
+      subPageInfo
+    );
+    // Should not throw 'notfound'.
+    assert(subPage);
+  });
+
   // MOVING
 
   it('is able to move root/parent/sibling/cousin after root/parent', async function() {
@@ -330,6 +419,16 @@ describe('Pages', function() {
     assert.strictEqual(page.path, `${homeId.replace(':en:published', '')}/cousin`);
     // Is the rank correct?
     assert.strictEqual(page.rank, 1);
+  });
+
+  it('is not able to move a page under itself', async function() {
+    await assert.rejects(
+      apos.page.move(apos.task.getReq(), 'cousin:en:published', 'cousin:en:published', 'lastChild'),
+      {
+        name: 'forbidden',
+        message: 'Cannot move a page under itself'
+      }
+    );
   });
 
   it('is able to move root/cousin before root/parent/child', async function() {
@@ -366,6 +465,269 @@ describe('Pages', function() {
 
     // Is the grandchild's path correct?
     assert.strictEqual(page.path, `${homeId.replace(':en:published', '')}/another-parent/parent/sibling`);
+  });
+
+  describe('move peer pages', function () {
+    this.afterEach(async function() {
+      await apos.doc.db.deleteMany({
+        type: 'test-page'
+      });
+    });
+
+    it('moving /bar under /foo should wind up with /foo/bar', async function() {
+      const fooPage = await apos.page.insert(
+        apos.task.getReq(),
+        '_home',
+        'lastChild',
+        {
+          slug: '/foo',
+          visibility: 'public',
+          type: 'test-page',
+          title: 'Foo Page'
+        }
+      );
+      const barPage = await apos.page.insert(
+        apos.task.getReq(),
+        '_home',
+        'lastChild',
+        {
+          slug: '/bar',
+          visibility: 'public',
+          type: 'test-page',
+          title: 'Bar Page'
+        }
+      );
+      const childPage = await apos.page.insert(
+        apos.task.getReq(),
+        barPage._id,
+        'lastChild',
+        {
+          slug: '/bar/child',
+          visibility: 'public',
+          type: 'test-page',
+          title: 'Child Page'
+        }
+      );
+
+      await apos.page.move(
+        apos.task.getReq(),
+        barPage._id,
+        fooPage._id,
+        'lastChild'
+      );
+
+      const movedPage = await apos.page.find(apos.task.getAnonReq(), { _id: barPage._id }).toObject();
+      const movedChildPage = await apos.page.find(apos.task.getAnonReq(), { _id: childPage._id }).toObject();
+
+      const actual = {
+        bar: {
+          path: movedPage.path,
+          rank: movedPage.rank,
+          slug: movedPage.slug
+        },
+        child: {
+          path: movedChildPage.path,
+          rank: movedChildPage.rank,
+          slug: movedChildPage.slug
+        }
+      };
+      const expected = {
+        bar: {
+          path: fooPage.path.concat('/', barPage.aposDocId),
+          rank: 0,
+          slug: '/foo/bar'
+        },
+        child: {
+          path: movedPage.path.concat('/', childPage.aposDocId),
+          rank: 0,
+          slug: '/foo/bar/child'
+        }
+      };
+
+      assert.deepEqual(actual, expected);
+    });
+
+    it('moving peer /foo/bar under /foo should wind up with /foo/bar', async function() {
+      const fooPage = await apos.page.insert(
+        apos.task.getReq(),
+        '_home',
+        'lastChild',
+        {
+          slug: '/foo',
+          visibility: 'public',
+          type: 'test-page',
+          title: 'Foo Page'
+        }
+      );
+      const barPage = await apos.page.insert(
+        apos.task.getReq(),
+        '_home',
+        'lastChild',
+        {
+          slug: '/foo/bar',
+          visibility: 'public',
+          type: 'test-page',
+          title: 'Bar Page'
+        }
+      );
+      const childPage = await apos.page.insert(
+        apos.task.getReq(),
+        barPage._id,
+        'lastChild',
+        {
+          slug: '/foo/bar/child',
+          visibility: 'public',
+          type: 'test-page',
+          title: 'Child Page'
+        }
+      );
+
+      await apos.page.move(
+        apos.task.getReq(),
+        barPage._id,
+        fooPage._id,
+        'lastChild'
+      );
+
+      const movedPage = await apos.page.find(apos.task.getAnonReq(), { _id: barPage._id }).toObject();
+      const movedChildPage = await apos.page.find(apos.task.getAnonReq(), { _id: childPage._id }).toObject();
+
+      const actual = {
+        bar: {
+          path: movedPage.path,
+          rank: movedPage.rank,
+          slug: movedPage.slug
+        },
+        child: {
+          path: movedChildPage.path,
+          rank: movedChildPage.rank,
+          slug: movedChildPage.slug
+        }
+      };
+      const expected = {
+        bar: {
+          path: fooPage.path.concat('/', barPage.aposDocId),
+          rank: 0,
+          slug: '/foo/bar'
+        },
+        child: {
+          path: movedPage.path.concat('/', childPage.aposDocId),
+          rank: 0,
+          slug: '/foo/bar/child'
+        }
+      };
+
+      assert.deepEqual(actual, expected);
+    });
+
+    it('moving /foobar under /foo should wind up with /foo/foobar', async function() {
+      const fooPage = await apos.page.insert(
+        apos.task.getReq(),
+        '_home',
+        'lastChild',
+        {
+          slug: '/foo',
+          visibility: 'public',
+          type: 'test-page',
+          title: 'Foo Page'
+        }
+      );
+      const foobarPage = await apos.page.insert(
+        apos.task.getReq(),
+        '_home',
+        'lastChild',
+        {
+          slug: '/foobar',
+          visibility: 'public',
+          type: 'test-page',
+          title: 'Foobar Page'
+        }
+      );
+      const childPage = await apos.page.insert(
+        apos.task.getReq(),
+        foobarPage._id,
+        'lastChild',
+        {
+          slug: '/foobar/child',
+          visibility: 'public',
+          type: 'test-page',
+          title: 'Child Page'
+        }
+      );
+
+      await apos.page.move(
+        apos.task.getReq(),
+        foobarPage._id,
+        fooPage._id,
+        'lastChild'
+      );
+
+      const movedPage = await apos.page.find(apos.task.getAnonReq(), { _id: foobarPage._id }).toObject();
+      const movedChildPage = await apos.page.find(apos.task.getAnonReq(), { _id: childPage._id }).toObject();
+
+      const actual = {
+        foobar: {
+          path: movedPage.path,
+          rank: movedPage.rank,
+          slug: movedPage.slug
+        },
+        child: {
+          path: movedChildPage.path,
+          rank: movedChildPage.rank,
+          slug: movedChildPage.slug
+        }
+      };
+      const expected = {
+        foobar: {
+          path: fooPage.path.concat('/', foobarPage.aposDocId),
+          rank: 0,
+          slug: '/foo/foobar'
+        },
+        child: {
+          path: movedPage.path.concat('/', childPage.aposDocId),
+          rank: 0,
+          slug: '/foo/foobar/child'
+        }
+      };
+
+      assert.deepEqual(actual, expected);
+    });
+  });
+
+  it('inferred page relationships are correct', async function() {
+    const req = apos.task.getReq();
+    const pages = await apos.page.find(req, {}).toArray();
+    for (const page of pages) {
+      if (page.level === 0) {
+        continue;
+      }
+      const { lastTargetId, lastPosition } = await apos.page.inferLastTargetIdAndPosition(page);
+      const parentPath = page.path.split('/').slice(0, page.path.split('/').length - 1).join('/');
+      assert(pages.find(p => p.path === parentPath));
+      const peers = pages.filter(p => p.path.match(apos.page.matchDescendants(parentPath)) && (p.level === page.level));
+      if (peers.length === 1) {
+        const parent = pages.find(p => p._id === lastTargetId);
+        assert(parent);
+        assert(page.path.startsWith(parent.path));
+        assert([ 'firstChild', 'lastChild' ].includes(lastPosition));
+      } else if (page.rank === Math.max(...peers.map(peer => peer.rank))) {
+        assert.strictEqual(lastPosition, 'lastChild');
+        const parent = pages.find(p => p._id === lastTargetId);
+        assert(parent);
+        assert(page.path.startsWith(parent.path));
+      } else if (page.rank === Math.min(...peers.map(peer => peer.rank))) {
+        assert.strictEqual(lastPosition, 'firstChild');
+        const parent = pages.find(p => p._id === lastTargetId);
+        assert(parent);
+        assert(page.path.startsWith(parent.path));
+      } else if (lastPosition === 'after') {
+        const peer = pages.find(p => p._id === lastTargetId);
+        assert(peer);
+        assert(page.rank > peer.rank);
+      } else {
+        throw new Error(`Unexpected position for ${page.path}: ${lastPosition}`);
+      }
+    }
   });
 
   it('should be able to serve a page', async function() {
@@ -1151,8 +1513,6 @@ describe('Pages', function() {
 
       it('should grant public access to a draft after having enabled draft sharing', async function() {
         const publicUrl = generatePublicUrl(shareResponse);
-        console.log('publicUrl', publicUrl);
-
         const response = await apos.http.get(shareResponse._url, { fullResponse: true });
         const publicResponse = await apos.http.get(publicUrl, { fullResponse: true });
 
@@ -1235,6 +1595,775 @@ describe('Pages', function() {
         }
         throw new Error('should have thrown 404 error');
       });
+    });
+  });
+
+  describe('publish, move and draft', function () {
+    beforeEach(async function() {
+      await t.destroy(apos);
+      apos = await t.create({
+        root: module,
+        modules: {
+          '@apostrophecms/page': {
+            options: {
+              park: [],
+              types: [
+                {
+                  name: '@apostrophecms/home-page',
+                  label: 'Home'
+                },
+                {
+                  name: 'test-page',
+                  label: 'Test Page'
+                }
+              ]
+            }
+          },
+          'test-page': {
+            extend: '@apostrophecms/page-type'
+          }
+        }
+      });
+    });
+
+    it('should publish and move published after draft doc', async function () {
+      const req = apos.task.getReq({ mode: 'draft' });
+
+      const page1 = await apos.page.insert(req, '_home', 'lastChild', {
+        title: 'Root First Page',
+        type: 'test-page',
+        slug: 'root-first-page'
+      });
+      const page2 = await apos.page.insert(req, '_home', 'lastChild', {
+        title: 'Root Second Page',
+        type: 'test-page',
+        slug: 'root-second-page'
+      });
+      const page3 = await apos.page.insert(req, '_home', 'lastChild', {
+        title: 'Root Third Page',
+        type: 'test-page',
+        slug: 'root-third-page'
+      });
+
+      // Publish and assert.
+      // Obviously, should not throw an error.
+      await apos.page.publish(req, page3);
+      {
+        const pages = await apos.doc.db.find({
+          type: 'test-page'
+        }).sort({ rank: 1 }).toArray();
+
+        const p1Idx = pages.findIndex(p => p._id === page1._id);
+        assert(p1Idx !== -1);
+        const p2Idx = pages.findIndex(p => p._id === page2._id);
+        assert(p2Idx !== -1);
+        const p3Idx = pages.findIndex(p => p._id === page3._id);
+        assert(p3Idx !== -1);
+        const p3IdxPublished = pages.findIndex(p => p._id === page3._id.replace(':draft', ':published'));
+        assert(p3IdxPublished !== -1);
+
+        // first, second, third/third-published
+        assert(p1Idx < p2Idx);
+        assert(p2Idx < p3Idx);
+        assert(p2Idx < p3IdxPublished);
+      }
+
+      // Move and assert.
+      await apos.page.move(req, page3._id, page1._id, 'after');
+      {
+        const pages = await apos.doc.db.find({
+          type: 'test-page'
+        }).sort({ rank: 1 }).toArray();
+
+        const p1Idx = pages.findIndex(p => p._id === page1._id);
+        assert(p1Idx !== -1);
+        const p2Idx = pages.findIndex(p => p._id === page2._id);
+        assert(p2Idx !== -1);
+        const p3Idx = pages.findIndex(p => p._id === page3._id);
+        assert(p3Idx !== -1);
+        const p3IdxPublished = pages.findIndex(p => p._id === page3._id.replace(':draft', ':published'));
+        assert(p3IdxPublished !== -1);
+
+        // first, third/third-published, second
+        assert(p1Idx < p3Idx);
+        assert(p1Idx < p3IdxPublished);
+        assert(p3Idx < p2Idx);
+        assert(p3IdxPublished < p2Idx);
+      }
+    });
+
+    it('should publish and move published after draft doc (nested)', async function () {
+      const req = apos.task.getReq({ mode: 'draft' });
+
+      const root = await apos.page.insert(req, '_home', 'lastChild', {
+        title: 'Root Page',
+        type: 'test-page'
+      });
+      await apos.page.publish(req, root);
+
+      const page1 = await apos.page.insert(req, root._id, 'lastChild', {
+        title: 'First Page',
+        type: 'test-page'
+      });
+      const page2 = await apos.page.insert(req, root._id, 'lastChild', {
+        title: 'Second Page',
+        type: 'test-page'
+      });
+      const page3 = await apos.page.insert(req, root._id, 'lastChild', {
+        title: 'Third Page',
+        type: 'test-page'
+      });
+
+      // Publish and assert.
+      // Obviously, should not throw an error.
+      await apos.page.publish(req, page3);
+      {
+        const pages = await apos.doc.db.find({
+          type: 'test-page',
+          level: 2
+        }).sort({
+          level: 1,
+          rank: 1
+        }).toArray();
+
+        const p1Idx = pages.findIndex(p => p._id === page1._id);
+        assert(p1Idx !== -1);
+        assert.equal(pages[p1Idx].path, `${root.path}/${page1.aposDocId}`);
+        const p2Idx = pages.findIndex(p => p._id === page2._id);
+        assert(p2Idx !== -1);
+        assert.equal(pages[p2Idx].path, `${root.path}/${page2.aposDocId}`);
+        const p3Idx = pages.findIndex(p => p._id === page3._id);
+        assert(p3Idx !== -1);
+        assert.equal(pages[p3Idx].path, `${root.path}/${page3.aposDocId}`);
+        const p3IdxPublished = pages.findIndex(p => p._id === page3._id.replace(':draft', ':published'));
+        assert(p3IdxPublished !== -1);
+        assert.equal(pages[p3IdxPublished].path, `${root.path}/${page3.aposDocId}`);
+
+        // first, second, third/third-published
+        assert(p1Idx < p2Idx);
+        assert(p2Idx < p3Idx);
+        assert(p2Idx < p3IdxPublished);
+      }
+
+      // Move and assert.
+      await apos.page.move(req, page3._id, page1._id, 'after');
+      {
+        const pages = await apos.doc.db.find({
+          type: 'test-page',
+          level: 2
+        }).sort({
+          level: 1,
+          rank: 1
+        }).toArray();
+
+        const p1Idx = pages.findIndex(p => p._id === page1._id);
+        assert(p1Idx !== -1);
+        const p2Idx = pages.findIndex(p => p._id === page2._id);
+        assert(p2Idx !== -1);
+        const p3Idx = pages.findIndex(p => p._id === page3._id);
+        assert(p3Idx !== -1);
+        const p3IdxPublished = pages.findIndex(p => p._id === page3._id.replace(':draft', ':published'));
+        assert(p3IdxPublished !== -1);
+
+        // first, third/third-published, second
+        assert(p1Idx < p3Idx);
+        assert(p1Idx < p3IdxPublished);
+        assert(p3Idx < p2Idx);
+        assert(p3IdxPublished < p2Idx);
+      }
+
+      // Publish the last draft and assert it's sorted right.
+      await apos.page.publish(req, page2);
+      {
+        const pages = await apos.doc.db.find({
+          type: 'test-page',
+          level: 2
+        }).sort({
+          level: 1,
+          rank: 1
+        }).toArray();
+
+        const p1Idx = pages.findIndex(p => p._id === page1._id);
+        assert(p1Idx !== -1);
+        const p2Idx = pages.findIndex(p => p._id === page2._id);
+        assert(p2Idx !== -1);
+        const p2IdxPublished = pages.findIndex(p => p._id === page2._id.replace(':draft', ':published'));
+        assert(p2IdxPublished !== -1);
+        const p3Idx = pages.findIndex(p => p._id === page3._id);
+        assert(p3Idx !== -1);
+        const p3IdxPublished = pages.findIndex(p => p._id === page3._id.replace(':draft', ':published'));
+        assert(p3IdxPublished !== -1);
+
+        // first, third/third-published, second
+        assert(p1Idx < p3Idx);
+        assert(p1Idx < p3IdxPublished);
+        assert(p3Idx < p2Idx);
+        assert(p3IdxPublished < p2IdxPublished);
+      }
+    });
+
+    it('should not be able to move published inside draft doc', async function () {
+      const req = apos.task.getReq({ mode: 'draft' });
+
+      const root = await apos.page.insert(req, '_home', 'lastChild', {
+        title: 'Root Page',
+        type: 'test-page'
+      });
+
+      const page1 = await apos.page.insert(req, '_home', 'lastChild', {
+        title: 'First Page',
+        type: 'test-page'
+      });
+      await apos.page.publish(req, page1);
+
+      await assert.rejects(apos.page.move(req, page1._id, root._id, 'firstChild'), {
+        name: 'forbidden',
+        message: 'Publish the parent page first.'
+      });
+    });
+
+    it('should not be able to publish inside draft doc', async function () {
+      const req = apos.task.getReq({ mode: 'draft' });
+
+      const root = await apos.page.insert(req, '_home', 'lastChild', {
+        title: 'Root Page',
+        type: 'test-page'
+      });
+
+      const page1 = await apos.page.insert(req, root._id, 'lastChild', {
+        title: 'First Page',
+        type: 'test-page'
+      });
+
+      await assert.rejects(
+        apos.page.publish(req, page1),
+        (error) => {
+          assert.equal(error.name, 'invalid');
+          assert.equal(error.data?.unpublishedAncestors?.length, 1);
+          assert.equal(error.data.unpublishedAncestors[0].title, 'Root Page');
+          return true;
+        }
+      );
+    });
+
+    it('should not be able to insert publish inside draft doc', async function () {
+      const req = apos.task.getReq({ mode: 'draft' });
+
+      const root = await apos.page.insert(req, '_home', 'lastChild', {
+        title: 'Root Page',
+        type: 'test-page'
+      });
+
+      // Publish directly via insert and req.mode = 'published'.
+      // This can really be done only programmatically, but it's a valid use case.
+      await assert.rejects(
+        apos.page.insert(req.clone({ mode: 'published' }), root._id, 'lastChild', {
+          title: 'First Page',
+          type: 'test-page'
+        }),
+        {
+          name: 'forbidden',
+          message: 'Publish the parent page first.'
+        }
+      );
+
+      // IMPORTANT - assert the published page is gone, the draft is still there.
+      const pages = await apos.doc.db.find({
+        type: 'test-page'
+      }).sort({ rank: 1 }).toArray();
+      const draftPage = pages.find(p => p.title === 'First Page' && p.aposMode === 'draft');
+      const publishedPage = pages.find(p => p.title === 'First Page' && p.aposMode === 'published');
+      assert(draftPage);
+      assert(draftPage.level === 2);
+      assert.equal(typeof publishedPage, 'undefined');
+    });
+  });
+
+  describe('batch', function () {
+    beforeEach(async function() {
+      await t.destroy(apos);
+      apos = await t.create({
+        root: module,
+        modules: {
+          '@apostrophecms/page': {
+            options: {
+              park: [],
+              types: [
+                {
+                  name: '@apostrophecms/home-page',
+                  label: 'Home'
+                },
+                {
+                  name: 'test-page',
+                  label: 'Test Page'
+                }
+              ]
+            }
+          },
+          'test-page': {
+            extend: '@apostrophecms/page-type'
+          }
+        }
+      });
+
+      const req = apos.task.getReq({ mode: 'draft' });
+
+      const level1Page1 = await apos.page.insert(
+        req,
+        '_home',
+        'lastChild',
+        {
+          title: 'Level 1 Page 1',
+          type: 'test-page',
+          slug: '/level-1-page-1'
+        }
+      );
+      const level1Page2 = await apos.page.insert(
+        req,
+        '_home',
+        'lastChild',
+        {
+          title: 'Level 1 Page 2',
+          type: 'test-page',
+          slug: '/level-1-page-2'
+        }
+      );
+      const level1Page3 = await apos.page.insert(
+        req,
+        '_home',
+        'lastChild',
+        {
+          title: 'Level 1 Page 3',
+          type: 'test-page',
+          slug: '/level-1-page-3'
+        }
+      );
+      const level2Page1 = await apos.page.insert(
+        req,
+        level1Page1._id,
+        'lastChild',
+        {
+          title: 'Level 2 Page 1',
+          type: 'test-page',
+          slug: '/level-1-page-1/level-2-page-1'
+        }
+      );
+      const level3Page1 = await apos.page.insert(
+        req,
+        level2Page1._id,
+        'lastChild',
+        {
+          title: 'Level 3 Page 1',
+          type: 'test-page',
+          slug: '/level-1-page-1/level-2-page-1/level-3-page-1'
+        }
+      );
+      const level4Page1 = await apos.page.insert(
+        req,
+        level3Page1._id,
+        'lastChild',
+        {
+          title: 'Level 4 Page 1',
+          type: 'test-page',
+          slug: '/level-1-page-1/level-2-page-1/level-3-page-1/level-4-page-1'
+        }
+      );
+      const level5Page1 = await apos.page.insert(
+        req,
+        level4Page1._id,
+        'lastChild',
+        {
+          title: 'Level 5 Page 1',
+          type: 'test-page',
+          slug: '/level-1-page-1/level-2-page-1/level-3-page-1/level-4-page-1/level-5-page-1'
+        }
+      );
+      const level5Page2 = await apos.page.insert(
+        req,
+        level4Page1._id,
+        'lastChild',
+        {
+          title: 'Level 5 Page 2',
+          type: 'test-page',
+          slug: '/level-1-page-1/level-2-page-1/level-3-page-1/level-4-page-1/level-5-page-2'
+        }
+      );
+
+      await apos.page.publish(req, level1Page1);
+      await apos.page.publish(req, level1Page2);
+      await apos.page.publish(req, level1Page3);
+      await apos.page.publish(req, level2Page1);
+      await apos.page.publish(req, level3Page1);
+      await apos.page.publish(req, level4Page1);
+      await apos.page.publish(req, level5Page1);
+      await apos.page.publish(req, level5Page2);
+    });
+
+    afterEach(async function() {
+      await apos.doc.db.deleteMany({ type: 'test-page' });
+    });
+
+    it('should archive only the selected pages and move up the unselected ones', async function () {
+      const req = apos.task.getReq({ mode: 'draft' });
+
+      const ids = await apos.page
+        .find(
+          req,
+          {
+            title: {
+              $in: [
+                'Level 1 Page 1',
+                'Level 1 Page 3',
+                'Level 3 Page 1',
+                'Level 5 Page 1'
+              ]
+            }
+          },
+          {
+            project: {
+              _id: 1
+            }
+          }
+        )
+        .toArray();
+      const patches = await apos.page.getBatchArchivePatches(req, ids.map(({ _id }) => _id));
+      for (const patch of patches) {
+        try {
+          await apos.page.patch(
+            req.clone({
+              mode: 'draft',
+              body: patch.body
+            }),
+            patch._id
+          );
+        } catch (error) {
+          console.error(error);
+        }
+      }
+
+      const home = await apos.page.find(req, { slug: '/' }).ancestors(false).children(true).toObject();
+      const archive = await apos.page.find(req, { slug: '/archive' }).archived(true).ancestors(false).children(true).toObject();
+      const level1Page1 = await apos.page.find(req, { title: 'Level 1 Page 1' }).archived(null).ancestors(true).children(true).toObject();
+      const level1Page2 = await apos.page.find(req, { title: 'Level 1 Page 2' }).archived(null).ancestors(true).children(true).toObject();
+      const level1Page3 = await apos.page.find(req, { title: 'Level 1 Page 3' }).archived(null).ancestors(true).children(true).toObject();
+      const level2Page1 = await apos.page.find(req, { title: 'Level 2 Page 1' }).archived(null).ancestors(true).children(true).toObject();
+      const level3Page1 = await apos.page.find(req, { title: 'Level 3 Page 1' }).archived(null).ancestors(true).children(true).toObject();
+      const level4Page1 = await apos.page.find(req, { title: 'Level 4 Page 1' }).archived(null).ancestors(true).children(true).toObject();
+      const level5Page1 = await apos.page.find(req, { title: 'Level 5 Page 1' }).archived(null).ancestors(true).children(true).toObject();
+      const level5Page2 = await apos.page.find(req, { title: 'Level 5 Page 2' }).archived(null).ancestors(true).children(true).toObject();
+
+      const formatPage = page => ({
+        title: page.title,
+        slug: page.slug,
+        path: page.path,
+        level: page.level,
+        rank: page.rank,
+        archived: page.archived || false,
+        aposDocId: page.aposDocId,
+        _children: page._children
+          .map(childPage => {
+            return {
+              _id: childPage._id
+            };
+          })
+      });
+
+      const actual = {
+        level1Page1: formatPage(level1Page1),
+        level1Page2: formatPage(level1Page2),
+        level1Page3: formatPage(level1Page3),
+        level2Page1: formatPage(level2Page1),
+        level3Page1: formatPage(level3Page1),
+        level4Page1: formatPage(level4Page1),
+        level5Page1: formatPage(level5Page1),
+        level5Page2: formatPage(level5Page2)
+      };
+      const expected = {
+        level1Page1: {
+          title: 'Level 1 Page 1',
+          slug: level1Page1.slug.startsWith('/level-1-page-1-deduplicate-') ? level1Page1.slug : '/level-1-page-1-deduplicate-',
+          path: `${home.aposDocId}/${archive.aposDocId}/${level1Page1.aposDocId}`,
+          level: 2,
+          rank: 0,
+          archived: true,
+          aposDocId: level1Page1.aposDocId,
+          _children: []
+        },
+        level1Page2: {
+          title: 'Level 1 Page 2',
+          slug: '/level-1-page-2',
+          path: `${home.aposDocId}/${level1Page2.aposDocId}`,
+          level: 1,
+          rank: 4,
+          archived: false,
+          aposDocId: level1Page2.aposDocId,
+          _children: []
+        },
+        level1Page3: {
+          title: 'Level 1 Page 3',
+          slug: level1Page3.slug.startsWith('/level-1-page-3-deduplicate-') ? level1Page3.slug : '/level-1-page-3-deduplicate-',
+          path: `${home.aposDocId}/${archive.aposDocId}/${level1Page3.aposDocId}`,
+          level: 2,
+          rank: 1,
+          archived: true,
+          aposDocId: level1Page3.aposDocId,
+          _children: []
+        },
+        level2Page1: {
+          title: 'Level 2 Page 1',
+          slug: '/level-2-page-1',
+          path: `${home.aposDocId}/${level2Page1.aposDocId}`,
+          level: 1,
+          rank: 2,
+          archived: false,
+          aposDocId: level2Page1.aposDocId,
+          _children: [
+            {
+              _id: level4Page1._id
+            }
+          ]
+        },
+        level3Page1: {
+          title: 'Level 3 Page 1',
+          slug: level3Page1.slug.startsWith('/level-1-page-1/level-3-page-1-deduplicate-') ? level3Page1.slug : '/level-1-page-1/level-3-page-1-deduplicate-',
+          path: `${home.aposDocId}/${archive.aposDocId}/${level1Page1.aposDocId}/${level3Page1.aposDocId}`,
+          level: 3,
+          rank: 1,
+          archived: true,
+          aposDocId: level3Page1.aposDocId,
+          _children: []
+        },
+        level4Page1: {
+          title: 'Level 4 Page 1',
+          slug: '/level-2-page-1/level-4-page-1',
+          path: `${home.aposDocId}/${level2Page1.aposDocId}/${level4Page1.aposDocId}`,
+          level: 2,
+          rank: 2,
+          archived: false,
+          aposDocId: level4Page1.aposDocId,
+          _children: [
+            {
+              _id: level5Page2._id
+            }
+          ]
+        },
+        level5Page1: {
+          title: 'Level 5 Page 1',
+          slug: level5Page1.slug.startsWith('/level-1-page-1/level-3-page-1/level-5-page-1-deduplicate-') ? level5Page1.slug : '/level-1-page-1/level-3-page-1/level-5-page-1-deduplicate-',
+          path: `${home.aposDocId}/${archive.aposDocId}/${level1Page1.aposDocId}/${level3Page1.aposDocId}/${level5Page1.aposDocId}`,
+          level: 4,
+          rank: 1,
+          archived: true,
+          aposDocId: level5Page1.aposDocId,
+          _children: []
+        },
+        level5Page2: {
+          title: 'Level 5 Page 2',
+          slug: '/level-2-page-1/level-4-page-1/level-5-page-2',
+          path: `${home.aposDocId}/${level2Page1.aposDocId}/${level4Page1.aposDocId}/${level5Page2.aposDocId}`,
+          level: 3,
+          rank: 2,
+          archived: false,
+          aposDocId: level5Page2.aposDocId,
+          _children: []
+        }
+      };
+
+      assert.deepEqual(actual, expected);
+    });
+
+    it('should restore only the selected pages and move up the unselected ones', async function () {
+      const req = apos.task.getReq({ mode: 'draft' });
+
+      const ids = await apos.page
+        .find(
+          req,
+          {
+            title: {
+              $in: [
+                'Level 1 Page 1',
+                'Level 1 Page 3',
+                'Level 3 Page 1',
+                'Level 5 Page 1'
+              ]
+            }
+          },
+          {
+            project: {
+              _id: 1,
+              title: 1
+            }
+          }
+        )
+        .toArray();
+      const archivePatches = await apos.page.getBatchArchivePatches(req, ids.map(({ _id }) => _id));
+      for (const patch of archivePatches) {
+        try {
+          await apos.page.patch(
+            req.clone({
+              mode: 'draft',
+              body: patch.body
+            }),
+            patch._id
+          );
+        } catch (error) {
+          console.error(error);
+        }
+      }
+
+      const restorePatches = await apos.page.getBatchRestorePatches(
+        req,
+        ids
+          .filter(({ title }) => [ 'Level 1 Page 1', 'Level 5 Page 1' ].includes(title))
+          .map(({ _id }) => _id)
+      );
+      for (const patch of restorePatches) {
+        try {
+          await apos.page.patch(
+            req.clone({
+              mode: 'draft',
+              body: patch.body
+            }),
+            patch._id
+          );
+        } catch (error) {
+          console.error(error);
+        }
+      }
+
+      const home = await apos.page.find(req, { slug: '/' }).ancestors(false).children(true).toObject();
+      const archive = await apos.page.find(req, { slug: '/archive' }).archived(true).ancestors(false).children(true).toObject();
+      const level1Page1 = await apos.page.find(req, { title: 'Level 1 Page 1' }).archived(null).ancestors(true).children(true).toObject();
+      const level1Page2 = await apos.page.find(req, { title: 'Level 1 Page 2' }).archived(null).ancestors(true).children(true).toObject();
+      const level1Page3 = await apos.page.find(req, { title: 'Level 1 Page 3' }).archived(null).ancestors(true).children(true).toObject();
+      const level2Page1 = await apos.page.find(req, { title: 'Level 2 Page 1' }).archived(null).ancestors(true).children(true).toObject();
+      const level3Page1 = await apos.page.find(req, { title: 'Level 3 Page 1' }).archived(null).ancestors(true).children(true).toObject();
+      const level4Page1 = await apos.page.find(req, { title: 'Level 4 Page 1' }).archived(null).ancestors(true).children(true).toObject();
+      const level5Page1 = await apos.page.find(req, { title: 'Level 5 Page 1' }).archived(null).ancestors(true).children(true).toObject();
+      const level5Page2 = await apos.page.find(req, { title: 'Level 5 Page 2' }).archived(null).ancestors(true).children(true).toObject();
+
+      const formatPage = page => ({
+        title: page.title,
+        slug: page.slug,
+        path: page.path,
+        level: page.level,
+        rank: page.rank,
+        archived: page.archived || false,
+        aposDocId: page.aposDocId,
+        _children: page._children
+          .map(childPage => {
+            return {
+              _id: childPage._id
+            };
+          })
+      });
+
+      const actual = {
+        level1Page1: formatPage(level1Page1),
+        level1Page2: formatPage(level1Page2),
+        level1Page3: formatPage(level1Page3),
+        level2Page1: formatPage(level2Page1),
+        level3Page1: formatPage(level3Page1),
+        level4Page1: formatPage(level4Page1),
+        level5Page1: formatPage(level5Page1),
+        level5Page2: formatPage(level5Page2)
+      };
+      const expected = {
+        level1Page1: {
+          title: 'Level 1 Page 1',
+          slug: '/level-1-page-1',
+          path: `${home.aposDocId}/${level1Page1.aposDocId}`,
+          level: 1,
+          rank: 0,
+          archived: false,
+          aposDocId: level1Page1.aposDocId,
+          _children: [
+            {
+              _id: level5Page1._id
+            }
+          ]
+        },
+        level1Page2: {
+          title: 'Level 1 Page 2',
+          slug: '/level-1-page-2',
+          path: `${home.aposDocId}/${level1Page2.aposDocId}`,
+          level: 1,
+          rank: 5,
+          archived: false,
+          aposDocId: level1Page2.aposDocId,
+          _children: []
+        },
+        level1Page3: {
+          title: 'Level 1 Page 3',
+          slug: level1Page3.slug.startsWith('/level-1-page-3-deduplicate-') ? level1Page3.slug : '/level-1-page-3-deduplicate-',
+          path: `${home.aposDocId}/${archive.aposDocId}/${level1Page3.aposDocId}`,
+          level: 2,
+          rank: 1,
+          archived: true,
+          aposDocId: level1Page3.aposDocId,
+          _children: []
+        },
+        level2Page1: {
+          title: 'Level 2 Page 1',
+          slug: '/level-2-page-1',
+          path: `${home.aposDocId}/${level2Page1.aposDocId}`,
+          level: 1,
+          rank: 3,
+          archived: false,
+          aposDocId: level2Page1.aposDocId,
+          _children: [
+            {
+              _id: level4Page1._id
+            }
+          ]
+        },
+        level3Page1: {
+          title: 'Level 3 Page 1',
+          slug: level3Page1.slug.startsWith('/level-1-page-1/level-3-page-1-deduplicate-') ? level3Page1.slug : '/level-1-page-1/level-3-page-1-deduplicate-',
+          path: `${home.aposDocId}/${archive.aposDocId}/${level3Page1.aposDocId}`,
+          level: 2,
+          rank: 2,
+          archived: true,
+          aposDocId: level3Page1.aposDocId,
+          _children: []
+        },
+        level4Page1: {
+          title: 'Level 4 Page 1',
+          slug: '/level-2-page-1/level-4-page-1',
+          path: `${home.aposDocId}/${level2Page1.aposDocId}/${level4Page1.aposDocId}`,
+          level: 2,
+          rank: 2,
+          archived: false,
+          aposDocId: level4Page1.aposDocId,
+          _children: [
+            {
+              _id: level5Page2._id
+            }
+          ]
+        },
+        level5Page1: {
+          title: 'Level 5 Page 1',
+          slug: '/level-1-page-1/level-3-page-1/level-5-page-1',
+          path: `${home.aposDocId}/${level1Page1.aposDocId}/${level5Page1.aposDocId}`,
+          level: 2,
+          rank: 0,
+          archived: false,
+          aposDocId: level5Page1.aposDocId,
+          _children: []
+        },
+        level5Page2: {
+          title: 'Level 5 Page 2',
+          slug: '/level-2-page-1/level-4-page-1/level-5-page-2',
+          path: `${home.aposDocId}/${level2Page1.aposDocId}/${level4Page1.aposDocId}/${level5Page2.aposDocId}`,
+          level: 3,
+          rank: 2,
+          archived: false,
+          aposDocId: level5Page2.aposDocId,
+          _children: []
+        }
+      };
+
+      assert.deepEqual(actual, expected);
     });
   });
 });

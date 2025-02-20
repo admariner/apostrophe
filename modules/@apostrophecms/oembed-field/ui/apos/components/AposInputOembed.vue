@@ -1,31 +1,37 @@
 <template>
   <AposInputWrapper
-    :modifiers="modifiers" :field="field"
-    :error="effectiveError" :uid="uid"
+    :modifiers="modifiers"
+    :field="field"
+    :error="effectiveError"
+    :uid="uid"
     :display-options="displayOptions"
   >
     <template #body>
       <div class="apos-input-wrapper">
         <input
+          :id="uid"
+          v-model="next.url"
           :class="classes"
-          v-model="next.url" type="url"
+          type="url"
           :placeholder="$t(field.placeholder)"
-          :disabled="field.readOnly" :required="field.required"
-          :id="uid" :tabindex="tabindex"
+          :disabled="field.readOnly"
+          :readonly="tempReadOnly"
+          :required="field.required"
+          :tabindex="tabindex"
         >
         <component
+          :is="icon"
           v-if="icon"
           :size="iconSize"
           class="apos-input-icon"
-          :is="icon"
         />
         <!-- eslint-disable vue/no-v-html -->
         <div
           v-if="!error && oembedResult.html"
-          v-html="oembedResult.html"
           class="apos-input__embed"
           :class="{ 'apos-is-dynamic': !!dynamicRatio }"
           :style="{ paddingTop: dynamicRatio && `${(dynamicRatio * 100)}%` }"
+          v-html="oembedResult.html"
         />
       </div>
       <!-- eslint-enable vue/no-v-html -->
@@ -42,11 +48,15 @@ export default {
   emits: [ 'return' ],
   data () {
     return {
-      next: (this.value && this.value.data)
-        ? this.value.data : {},
+      next: (this.modelValue && this.modelValue.data)
+        ? { ...this.modelValue.data } : {},
       oembedResult: {},
       dynamicRatio: '',
-      oembedError: null
+      oembedError: null,
+
+      // This variable will set the input as readonly,
+      // not disabled, in order to avoid losing focus.
+      tempReadOnly: false
     };
   },
   computed: {
@@ -84,7 +94,7 @@ export default {
         this.field.oembedType && this.oembedResult.type &&
         this.oembedResult.type !== this.field.oembedType
       ) {
-        return { message: 'Embed type not supported' };
+        return { message: this.$t('apostrophe:oembedTypeNotSupported') };
       } else if (this.oembedError) {
         return this.oembedError.message ? {
           message: this.oembedError.message
@@ -104,7 +114,7 @@ export default {
       this.validateAndEmit();
     },
     async loadOembed () {
-      this.field.readOnly = true;
+      this.tempReadOnly = true;
       this.oembedResult = {};
       this.oembedError = null;
       this.dynamicRatio = '';
@@ -127,12 +137,12 @@ export default {
         if (error.body && error.body.message) {
           this.oembedError = error.body;
         } else {
-          this.oembedError = { message: 'Invalid embed URL' };
+          this.oembedError = { message: this.$t('apostrophe:oembedInvalidEmbedUrl') };
         }
         this.next.title = '';
         this.next.thumbnail = '';
       } finally {
-        this.field.readOnly = false;
+        this.tempReadOnly = false;
       }
     }
   }
@@ -141,7 +151,7 @@ export default {
 
 <style lang="scss" scoped>
   .apos-input__embed {
-    ::v-deep iframe {
+    :deep(iframe) {
       max-width: 100%;
     }
 
@@ -150,7 +160,7 @@ export default {
       width: 100%;
       height: 0;
 
-      ::v-deep iframe {
+      :deep(iframe) {
         position: absolute;
         top: 0;
         left: 0;
