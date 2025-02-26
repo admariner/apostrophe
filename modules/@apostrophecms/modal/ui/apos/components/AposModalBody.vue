@@ -1,10 +1,16 @@
 <template>
   <div class="apos-modal__body" :class="{ 'apos-modal__body--flex': hasSlot('footer') }">
     <div class="apos-modal__body-inner">
-      <div v-if="hasSlot('bodyHeader')" class="apos-modal__body-header">
+      <div
+        v-if="hasSlot('bodyHeader')"
+        ref="bodyHeader"
+        class="apos-modal__body-header"
+      >
         <slot name="bodyHeader" />
       </div>
-      <div class="apos-modal__body-main">
+      <div
+        class="apos-modal__body-main"
+      >
         <slot name="bodyMain" />
       </div>
     </div>
@@ -17,6 +23,17 @@
 <script>
 export default {
   name: 'AposModalBody',
+  data() {
+    return {
+      headerHeight: 0
+    };
+  },
+  async mounted() {
+    if (this.$refs.bodyHeader) {
+      await this.$nextTick();
+      this.headerHeight = this.$refs.bodyHeader.offsetHeight;
+    }
+  },
   methods: {
     hasSlot(name) {
       return !!this.$slots[name];
@@ -28,7 +45,11 @@ export default {
 <style lang="scss" scoped>
 .apos-modal__body {
   overflow-y: auto;
-  padding: 20px;
+  padding: $spacing-double;
+
+  @include media-up(lap) {
+    padding: $spacing-quadruple;
+  }
 }
 
 .apos-modal__body--flex {
@@ -46,10 +67,6 @@ export default {
 
 .apos-modal__main--no-rails .apos-modal__body {
   padding: 20px;
-}
-
-.apos-modal__body-header {
-  margin-bottom: 20px;
 }
 
 .apos-modal__body-footer {

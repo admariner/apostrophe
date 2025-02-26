@@ -1,42 +1,48 @@
 <template>
   <AposModal
-    :modal="modal" :modal-title="modalTitle"
     ref="modal"
-    @esc="confirmAndCancel" @no-modal="$emit('safe-close')"
-    @inactive="modal.active = false" @show-modal="modal.showModal = true"
+    :modal="modal"
+    :modal-title="modalTitle"
+    :modal-data="modalData"
+    @esc="confirmAndCancel"
+    @inactive="modal.active = false"
+    @show-modal="modal.showModal = true"
   >
     <template #secondaryControls>
       <AposButton
         v-if="relationshipField"
-        type="default" label="apostrophe:cancel"
+        type="default"
+        label="apostrophe:cancel"
         @click="confirmAndCancel"
       />
       <AposButton
         v-else
-        type="default" label="apostrophe:exit"
+        type="default"
+        label="apostrophe:exit"
         @click="confirmAndCancel"
       />
     </template>
     <template #primaryControls>
-      <AposContextMenu
-        v-if="utilityOperations.menu.length"
-        :button="utilityOperations.button"
-        :menu="utilityOperations.menu"
-        @item-clicked="utilityOperationsHandler"
+      <AposUtilityOperations
+        :module-options="moduleOptions"
+        :has-relationship-field="!!relationshipField"
       />
       <AposButton
         v-if="relationshipField"
         type="primary"
         :label="saveRelationshipLabel"
         :disabled="!!relationshipErrors"
+        :attrs="{'data-apos-focus-priority': 1}"
         @click="saveRelationship"
       />
       <AposButton
-        v-else-if="moduleOptions.canEdit && moduleOptions.showCreate"
+        v-else-if="moduleOptions.canCreate && moduleOptions.showCreate"
         :label="{
           key: 'apostrophe:newDocType',
           type: $t(moduleOptions.label)
-        }" type="primary"
+        }"
+        type="primary"
+        :attrs="{'data-apos-focus-priority': 1}"
         @click="create"
       />
     </template>
@@ -46,15 +52,15 @@
           <div class="apos-pieces-manager__relationship__counts">
             <AposMinMaxCount
               :field="relationshipField"
-              :value="checkedDocs"
+              :model-value="checkedDocs"
             />
           </div>
           <AposSlatList
             class="apos-pieces-manager__relationship__items"
-            @input="setCheckedDocs"
+            :model-value="checkedDocs"
+            :relationship-schema="relationshipField?.schema"
+            @update:model-value="setCheckedDocs"
             @item-clicked="editRelationship"
-            :value="checkedDocs"
-            :has-relationship-schema="!!(relationshipField && relationshipField.schema)"
           />
         </div>
       </AposModalRail>
@@ -72,16 +78,18 @@
             :labels="moduleLabels"
             :displayed-items="items.length"
             :is-relationship="!!relationshipField"
+            :checked="checked"
             :checked-count="checked.length"
             :batch-operations="moduleOptions.batchOperations"
-            @select-click="selectAll"
-            @search="search"
-            @page-change="updatePage"
-            @filter="filter"
-            @batch="handleBatchAction"
+            :module-name="moduleName"
             :options="{
               disableUnchecked: maxReached()
             }"
+            @select-click="selectAll"
+            @search="onSearchDebounced"
+            @page-change="updatePage"
+            @filter="filter"
+            @batch="handleBatchAction"
           />
           <AposDocsManagerSelectBox
             :selected-state="selectAllState"
@@ -97,16 +105,16 @@
         <template #bodyMain>
           <AposDocsManagerDisplay
             v-if="items.length > 0"
+            v-model:checked="checked"
             :items="items"
             :headers="headers"
-            v-model="checked"
-            @open="edit"
             :options="{
               ...moduleOptions,
               disableUnchecked: maxReached(),
               disableUnpublished: disableUnpublished,
               manuallyPublished: manuallyPublished
             }"
+            @open="edit"
           />
           <div v-else class="apos-pieces-manager__empty">
             <AposEmptyState :empty-state="emptyDisplay" />
@@ -118,9 +126,12 @@
 </template>
 
 <script>
+import { mapState } from 'pinia';
 import AposDocsManagerMixin from 'Modules/@apostrophecms/modal/mixins/AposDocsManagerMixin';
 import AposModifiedMixin from 'Modules/@apostrophecms/ui/mixins/AposModifiedMixin';
 import AposPublishMixin from 'Modules/@apostrophecms/ui/mixins/AposPublishMixin';
+import { useModalStore } from 'Modules/@apostrophecms/ui/stores/modal';
+import { debounceAsync } from 'Modules/@apostrophecms/ui/utils';
 
 export default {
   name: 'AposDocsManager',
@@ -131,13 +142,18 @@ export default {
     moduleName: {
       type: String,
       required: true
+    },
+    modalData: {
+      type: Object,
+      required: true
     }
   },
-  emits: [ 'archive', 'safe-close' ],
+  emits: [ 'archive' ],
   data() {
     return {
       modal: {
         active: false,
+        triggerFocusRefresh: 0,
         type: 'overlay',
         showModal: false
       },
@@ -147,17 +163,10 @@ export default {
       totalPages: 1,
       currentPage: 1,
       filterValues: {},
-      queryExtras: {},
-      holdQueries: false,
-      utilityOperations: {
-        button: {
-          label: 'apostrophe:moreOperations',
-          iconOnly: true,
-          icon: 'dots-vertical-icon',
-          type: 'outline'
-        },
-        menu: []
+      queryExtras: {
+        viewContext: this.relationshipField ? 'relationship' : 'manage'
       },
+      holdQueries: false,
       filterChoices: {},
       allPiecesSelection: {
         isSelected: false,
@@ -166,6 +175,7 @@ export default {
     };
   },
   computed: {
+    ...mapState(useModalStore, [ 'activeModal' ]),
     moduleOptions() {
       return window.apos.modules[this.moduleName];
     },
@@ -220,6 +230,11 @@ export default {
     }
   },
   created() {
+    const DEBOUNCE_TIMEOUT = 500;
+    this.onSearchDebounced = debounceAsync(this.onSearch, DEBOUNCE_TIMEOUT, {
+      onSuccess: this.search
+    });
+
     this.moduleOptions.filters.forEach(filter => {
       this.filterValues[filter.name] = filter.def;
       if (!filter.choices) {
@@ -233,57 +248,27 @@ export default {
     this.headers = this.computeHeaders();
     // Get the data. This will be more complex in actuality.
     this.modal.active = true;
-    this.setUtilityOperations();
-    await this.getPieces();
-    await this.getAllPiecesTotal();
+    await this.managePieces();
+    await this.manageAllPiecesTotal();
+    this.modal.triggerFocusRefresh++;
 
-    apos.bus.$on('content-changed', this.getPieces);
+    apos.bus.$on('content-changed', this.onContentChanged);
+    apos.bus.$on('command-menu-manager-create-new', this.create);
+    apos.bus.$on('command-menu-manager-close', this.confirmAndCancel);
   },
-  destroyed() {
+  onBeforeUnmount() {
+    this.onSearchDebounced.cancel();
+  },
+  unmounted() {
     this.destroyShortcuts();
-    apos.bus.$off('content-changed', this.getPieces);
+    apos.bus.$off('content-changed', this.onContentChanged);
+    apos.bus.$off('command-menu-manager-create-new', this.create);
+    apos.bus.$off('command-menu-manager-close', this.confirmAndCancel);
   },
   methods: {
-    utilityOperationsHandler(action) {
-      if (action === 'new') {
-        this.create();
-        return;
-      }
-
-      this.handleUtilityOperation(action);
-    },
-    setCheckedDocs(checked) {
-      this.checkedDocs = checked;
-      this.checked = this.checkedDocs.map(item => {
-        return item._id;
-      });
-    },
     async create() {
       await this.edit(null);
     },
-    async handleUtilityOperation(action) {
-      const operation = this.utilityOperations.menu
-        .find((op) => op.action === action);
-
-      if (!operation) {
-        return;
-      }
-
-      const {
-        modal, ...modalOptions
-      } = operation.modalOptions || {};
-
-      if (modal) {
-        await apos.modal.execute(modal, {
-          moduleAction: this.moduleOptions.action,
-          action,
-          labels: this.moduleLabels,
-          messages: operation.messages,
-          ...modalOptions
-        });
-      }
-    },
-
     // If pieceOrId is null, a new piece is created
     async edit(pieceOrId) {
       let piece;
@@ -315,15 +300,23 @@ export default {
       });
     },
     async finishSaved() {
-      await this.getPieces();
+      await this.managePieces();
     },
-    async request (mergeOptions) {
+    async request(mergeOptions) {
       const options = {
         ...this.filterValues,
         ...this.queryExtras,
         ...mergeOptions,
         withPublished: 1
       };
+
+      const type = this.relationshipField?.withType;
+      const isPage = apos.modules['@apostrophecms/page'].validPageTypes
+        .includes(type);
+
+      if (isPage) {
+        options.type = type;
+      }
 
       // Avoid undefined properties.
       const qs = Object.entries(options)
@@ -338,7 +331,45 @@ export default {
         draft: true
       });
     },
-    async getPieces () {
+    async requestPieces(page = 1, mergeOptions = {}) {
+      const {
+        currentPage, pages, results, choices
+      } = await this.request({
+        ...mergeOptions,
+        ...(
+          this.moduleOptions.managerApiProjection &&
+          { project: this.moduleOptions.managerApiProjection }
+        ),
+        page
+      });
+
+      return {
+        currentPage,
+        pages,
+        results,
+        choices
+      };
+    },
+    async requestAllPiecesTotal() {
+      const { count: total } = await this.request({ count: 1 });
+      return total;
+    },
+    async requestData(page = 1, mergeOptions = {}) {
+      const pieces = await this.requestPieces(page, mergeOptions);
+      const total = await this.requestAllPiecesTotal();
+
+      return {
+        ...pieces,
+        total
+      };
+    },
+    setPieces(data) {
+      this.currentPage = data.currentPage;
+      this.totalPages = data.pages;
+      this.items = data.results;
+      this.filterChoices = data.choices;
+    },
+    async managePieces () {
       if (this.holdQueries) {
         return;
       }
@@ -347,18 +378,18 @@ export default {
 
       const {
         currentPage, pages, results, choices
-      } = await this.request({
-        page: this.currentPage
-      });
+      } = await this.requestPieces(this.currentPage);
 
-      this.currentPage = currentPage;
-      this.totalPages = pages;
-      this.items = results;
-      this.filterChoices = choices;
+      this.setPieces({
+        currentPage,
+        pages,
+        results,
+        choices
+      });
       this.holdQueries = false;
     },
-    async getAllPiecesTotal () {
-      const { count: total } = await this.request({ count: 1 });
+    async manageAllPiecesTotal () {
+      const total = await this.requestAllPiecesTotal();
 
       this.setAllPiecesSelection({
         isSelected: false,
@@ -368,7 +399,9 @@ export default {
     async selectAllPieces () {
       const { results: docs } = await this.request({
         project: {
-          _id: 1
+          _id: 1,
+          _url: 1,
+          title: 1
         },
         attachments: false,
         perPage: this.allPiecesSelection.total
@@ -379,25 +412,42 @@ export default {
         docs
       });
     },
-    updatePage(num) {
+    async updatePage(num) {
       if (num) {
         this.currentPage = num;
-        this.getPieces();
+        await this.managePieces();
       }
     },
-    async search(query) {
+    // A stateless search handler, only requesting the data.
+    // It's meant to be debounced and used in conjunction with the search
+    // method that actually updates the state.
+    async onSearch(query) {
+      const queryExtras = { ...this.queryExtras };
       if (query) {
-        this.queryExtras.autocomplete = query;
+        queryExtras.autocomplete = query;
       } else if ('autocomplete' in this.queryExtras) {
-        delete this.queryExtras.autocomplete;
-      } else {
+        queryExtras.autocomplete = undefined;
+      }
+      const { total, ...pieces } = await this.requestData(1, queryExtras);
+
+      return {
+        pieces,
+        total
+      };
+    },
+    async search({ pieces, total }) {
+      // Most probably due to empty/invalid query.
+      if (!pieces) {
         return;
       }
 
       this.currentPage = 1;
 
-      await this.getPieces();
-      await this.getAllPiecesTotal();
+      this.setPieces(pieces);
+      this.setAllPiecesSelection({
+        isSelected: false,
+        total
+      });
     },
     async filter(filter, value) {
       if (this.filterValues[filter] === value) {
@@ -407,19 +457,18 @@ export default {
       this.filterValues[filter] = value;
       this.currentPage = 1;
 
-      await this.getPieces();
-      await this.getAllPiecesTotal();
+      await this.managePieces();
+      await this.manageAllPiecesTotal();
       this.headers = this.computeHeaders();
 
       this.setCheckedDocs([]);
     },
     shortcutNew(event) {
-      const interesting = (event.keyCode === 78 || event.keyCode === 67); // C(reate) or N(ew)
-      const topModal = apos.modal.stack[apos.modal.stack.length - 1] ? apos.modal.stack[apos.modal.stack.length - 1].id : null;
+      const interesting = event.keyCode === 78; // N(ew)
       if (
         interesting &&
         document.activeElement.tagName !== 'INPUT' &&
-        this.$refs.modal.id === topModal
+        this.$refs.modal.id === this.activeModal?.id
       ) {
         this.create();
       }
@@ -441,13 +490,17 @@ export default {
       const result = await apos.modal.execute('AposRelationshipEditor', {
         schema: this.relationshipField.schema,
         title: item.title,
-        value: item._fields
+        modelValue: item._fields
       });
       if (result) {
-        const index = this.checkedDocs.findIndex(_item => _item._id === item._id);
-        this.$set(this.checkedDocs, index, {
-          ...this.checkedDocs[index],
-          _fields: result
+        this.checkedDocs = this.checkedDocs.map((doc) => {
+          if (doc._id !== item._id) {
+            return doc;
+          }
+          return {
+            ...doc,
+            _fields: result
+          };
         });
       }
     },
@@ -475,11 +528,16 @@ export default {
             body: {
               ...requestOptions,
               _ids: this.checked,
-              messages: messages,
+              messages,
               type: this.checked.length === 1 ? this.moduleLabels.singular
                 : this.moduleLabels.plural
             }
           });
+          if (action === 'archive') {
+            await this.managePieces();
+            await this.manageAllPiecesTotal();
+            this.checked = [];
+          }
         } catch (error) {
           apos.notify('apostrophe:errorBatchOperationNoti', {
             interpolate: { operation: label },
@@ -489,23 +547,24 @@ export default {
         }
       }
     },
-    setUtilityOperations () {
-      const { utilityOperations } = this.moduleOptions;
-
-      const newPiece = {
-        action: 'new',
-        label: {
-          key: 'apostrophe:newDocType',
-          type: this.$t(this.moduleLabels.singular)
+    setCheckedDocs(checked) {
+      this.checkedDocs = checked.slice(0, this.relationshipField?.max || checked.length);
+      this.checked = this.checkedDocs.map(item => {
+        return item._id;
+      });
+    },
+    async onContentChanged({ doc, action }) {
+      if (
+        !doc ||
+        !doc.aposLocale ||
+        doc.aposLocale.split(':')[0] === this.modalData.locale
+      ) {
+        await this.managePieces();
+        await this.manageAllPiecesTotal();
+        if (action === 'archive') {
+          this.checked = this.checked.filter(checkedId => doc._id !== checkedId);
         }
-      };
-
-      this.utilityOperations.menu = [
-        ...this.relationshipField && this.moduleOptions.canEdit
-          ? [ newPiece ] : [],
-        ...this.utilityOperations.menu,
-        ...(!this.relationshipField && Array.isArray(utilityOperations) && utilityOperations) || []
-      ];
+      }
     }
   }
 };
@@ -516,8 +575,8 @@ export default {
   // `apos-media-manager__empty`. We should combine somehow.
   .apos-pieces-manager__empty {
     display: flex;
-    justify-content: center;
     align-items: center;
+    justify-content: center;
     width: 100%;
     height: 100%;
     margin-top: 130px;

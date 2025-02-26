@@ -6,14 +6,15 @@
         <AposButton
           label="apostrophe:clear"
           type="quiet"
-          @click="clear"
           :modifiers="['no-motion']"
+          @click="clear"
         />
       </div>
       <ol class="apos-media-manager-selections__items">
         <li
           v-for="item in items"
-          :key="item._id" class="apos-media-manager-selections__item"
+          :key="item._id"
+          class="apos-media-manager-selections__item"
         >
           <div
             v-if="item.attachment && item.attachment._urls"
@@ -30,7 +31,7 @@
               {{ item.title }}
             </div>
             <AposButton
-              v-if="canEdit"
+              v-if="item._edit"
               label="apostrophe:edit"
               type="quiet"
               :modifiers="['no-motion']"
@@ -49,10 +50,6 @@
 <script>
 export default {
   props: {
-    canEdit: {
-      type: Boolean,
-      default: false
-    },
     items: {
       type: Array,
       required: true
@@ -86,16 +83,23 @@ export default {
 <style lang="scss" scoped>
 .apos-media-manager-selections {
   @include type-base;
-  height: 100%;
-  padding: 20px;
+
+  & {
+    box-sizing: border-box;
+    height: 100%;
+    padding: 20px;
+  }
 }
 
 .apos-media-manager-selections__heading {
   @include type-base;
-  margin-bottom: $spacing-double;
+
+  & {
+    margin-bottom: $spacing-double;
+  }
 }
 
-.apos-media-manager-selections__heading ::v-deep .apos-button {
+.apos-media-manager-selections__heading :deep(.apos-button) {
   margin-left: $spacing-base;
 }
 
@@ -110,14 +114,14 @@ export default {
 
 .apos-media-manager-selections__item-thumb-container {
   display: flex;
-  justify-content: center;
-  align-items: center;
   flex-basis: 50px;
+  align-items: center;
+  justify-content: center;
   width: 50px;
   height: 50px;
+  border: 1px solid var(--a-base-7);
   min-width: 50px;
   background-color: var(--a-primary-background);
-  border: 1px solid var(--a-base-7);
 }
 
 .apos-media-manager-selections__item-thumb {
@@ -131,17 +135,20 @@ export default {
 
 .apos-media-manager-selections__item-title {
   @include type-base;
-  max-width: 150px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  margin-bottom: 5px;
+
+  & {
+    max-width: 150px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    margin-bottom: 5px;
+  }
 }
 
 .apos-media-manager-selection__empty {
   display: flex;
-  height: 100%;
-  justify-content: center;
   align-items: center;
+  justify-content: center;
+  height: 100%;
 }
 </style>

@@ -11,12 +11,14 @@
       further illustrate this concept.
     -->
     <div
-      v-if="!editMode" :key="'switchToEditMode'"
+      v-if="!editMode"
+      :key="'switchToEditMode'"
       class="apos-admin-bar__control-set__group"
     >
       <AposButton
         class="apos-admin-bar__context-button"
-        label="apostrophe:edit" type="subtle"
+        label="apostrophe:edit"
+        type="subtle"
         :modifiers="['small', 'no-motion']"
         :tooltip="{
           content: 'apostrophe:toggleEditMode',
@@ -36,22 +38,26 @@
         :show-preview="false"
       />
       <AposButton
-        v-if="!hasCustomUi"
+        v-if="canSwitchToPreviewMode && !isAutopublished"
         class="apos-admin-bar__context-button"
-        label="apostrophe:preview" :tooltip="{
+        label="apostrophe:preview"
+        :tooltip="{
           content: 'apostrophe:previewTooltip',
           placement: 'bottom'
         }"
-        type="subtle" :modifiers="['small', 'no-motion']"
+        type="subtle"
+        :modifiers="['small', 'no-motion']"
         @click="switchEditMode(false)"
       />
       <AposButton
-        v-if="editMode"
-        type="primary" :label="publishLabel"
+        v-if="editMode && !isAutopublished"
+        type="primary"
+        :label="publishLabel"
+        :tooltip="publishTooltip"
         :disabled="!readyToPublish"
         class="apos-admin-bar__btn apos-admin-bar__context-button"
-        @click="onPublish"
         :modifiers="['no-motion']"
+        @click="onPublish"
       />
     </div>
   </transition-group>
@@ -66,7 +72,10 @@ export default {
         return null;
       }
     },
-    hasCustomUi: Boolean,
+    hasCustomUi: {
+      type: Boolean,
+      required: true
+    },
     context: {
       type: Object,
       required: true
@@ -125,18 +134,54 @@ export default {
         }
       }
     },
+    publishTooltip() {
+      if (this.canPublish && this.context.lastPublishedAt && !this.hasBeenPublishedThisPageload) {
+        return {
+          content: 'apostrophe:updateTooltip',
+          placement: 'bottom'
+        };
+      }
+
+      return false;
+    },
+    isAutopublished() {
+      return this.context._aposAutopublish ?? (window.apos.modules[this.context.type].autopublish || false);
+    },
     hasBeenPublishedThisPageload() {
       return (this.context.lastPublishedAt > this.mountedAt) || ((this.context.submitted && this.context.submitted.at) > this.mountedAt);
+    },
+    canSwitchToEditMode() {
+      return !this.editMode;
+    },
+    canSwitchToPreviewMode() {
+      return this.editMode && !this.hasCustomUi;
     }
   },
   mounted() {
     this.mountedAt = (new Date()).toISOString();
+    apos.bus.$on('command-menu-admin-bar-toggle-edit-preview', this.toggleEditPreviewMode);
+    apos.bus.$on('command-menu-admin-bar-publish-draft', this.onPublish);
+  },
+  unmounted() {
+    apos.bus.$off('command-menu-admin-bar-toggle-edit-preview', this.toggleEditPreviewMode);
+    apos.bus.$off('command-menu-admin-bar-publish-draft', this.onPublish);
   },
   methods: {
+    toggleEditPreviewMode() {
+      if (this.canSwitchToEditMode) {
+        this.switchEditMode(true);
+      } else if (this.canSwitchToPreviewMode) {
+        this.switchEditMode(false);
+      }
+    },
     switchEditMode(mode) {
       this.$emit('switch-edit-mode', mode);
     },
     onPublish() {
+      if (!this.editMode || !this.readyToPublish) {
+        return;
+      }
+
       if (!this.context.lastPublishedAt) {
         this.hasBeenPublishedButNotUpdated = true;
       } else {
@@ -153,7 +198,8 @@ export default {
 <style lang="scss" scoped>
 .apos-admin-bar__control-set--mode-and-settings {
   justify-content: flex-end;
-  & ::v-deep .apos-button {
+
+  &:deep(.apos-button) {
     margin-left: 4px;
   }
 }

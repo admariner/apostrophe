@@ -5,7 +5,7 @@
 // takes advantage of this module.
 
 const _ = require('lodash');
-const cuid = require('cuid');
+const { createId } = require('@paralleldrive/cuid2');
 
 module.exports = {
   options: {
@@ -13,10 +13,141 @@ module.exports = {
     // Do include a page tree button in the admin bar
     pageTree: true
   },
+  commands(self) {
+    const breakpointPreviewModeScreens = (
+      self.apos.asset.options.breakpointPreviewMode?.enable &&
+      self.apos.asset.options.breakpointPreviewMode?.screens
+    ) || {};
+    const breakpointPreviewModeCommands = {
+      [`${self.__meta.name}:toggle-breakpoint-preview-mode:exit`]: {
+        type: 'item',
+        label: {
+          key: 'apostrophe:commandMenuToggleBreakpointPreviewMode',
+          breakpoint: '$t(apostrophe:breakpointPreviewExit)'
+        },
+        action: {
+          type: 'command-menu-admin-bar-toggle-breakpoint-preview-mode',
+          payload: {
+            mode: null,
+            width: null,
+            height: null
+          }
+        },
+        shortcut: 'P,0'
+      }
+    };
+    let index = 1;
+    for (const [ name, screen ] of Object.entries(breakpointPreviewModeScreens)) {
+      // Up to 9 shortcuts available
+      if (index === 9) {
+        break;
+      }
+      if (!screen.shortcut) {
+        continue;
+      }
+
+      breakpointPreviewModeCommands[`${self.__meta.name}:toggle-breakpoint-preview-mode:${name}`] = {
+        type: 'item',
+        label: {
+          key: 'apostrophe:commandMenuToggleBreakpointPreviewMode',
+          breakpoint: `$t(${screen.label})`
+        },
+        action: {
+          type: 'command-menu-admin-bar-toggle-breakpoint-preview-mode',
+          payload: {
+            mode: name,
+            label: `$t(${screen.label})`,
+            width: screen.width,
+            height: screen.height
+          }
+        },
+        shortcut: `P,${index}`
+      };
+
+      index += 1;
+    };
+
+    return {
+      add: {
+        [`${self.__meta.name}:undo`]: {
+          type: 'item',
+          label: 'apostrophe:commandMenuUndo',
+          action: {
+            type: 'command-menu-admin-bar-undo'
+          },
+          shortcut: 'Ctrl+Z Meta+Z'
+        },
+        [`${self.__meta.name}:redo`]: {
+          type: 'item',
+          label: 'apostrophe:commandMenuRedo',
+          action: {
+            type: 'command-menu-admin-bar-redo'
+          },
+          shortcut: 'Ctrl+Shift+Z Meta+Shift+Z'
+        },
+        [`${self.__meta.name}:discard-draft`]: {
+          type: 'item',
+          label: 'apostrophe:commandMenuDiscardDraft',
+          action: {
+            type: 'command-menu-admin-bar-discard-draft'
+          },
+          shortcut: 'Ctrl+Shift+Backspace Meta+Shift+Backspace'
+        },
+        [`${self.__meta.name}:publish-draft`]: {
+          type: 'item',
+          label: 'apostrophe:commandMenuPublishDraft',
+          action: {
+            type: 'command-menu-admin-bar-publish-draft'
+          },
+          shortcut: 'Ctrl+Shift+P Meta+Shift+P'
+        },
+        [`${self.__meta.name}:toggle-edit-preview-mode`]: {
+          type: 'item',
+          label: 'apostrophe:commandMenuToggleEditPreviewMode',
+          action: {
+            type: 'command-menu-admin-bar-toggle-edit-preview'
+          },
+          shortcut: 'Ctrl+/ Meta+/'
+        },
+        [`${self.__meta.name}:toggle-published-draft-document`]: {
+          type: 'item',
+          label: 'apostrophe:commandMenuTogglePublishedDraftDocument',
+          action: {
+            type: 'command-menu-admin-bar-toggle-publish-draft'
+          },
+          shortcut: 'Ctrl+Shift+D Meta+Shift+D'
+        },
+        ...breakpointPreviewModeCommands
+      },
+      modal: {
+        default: {
+          '@apostrophecms/command-menu:content': {
+            label: 'apostrophe:commandMenuContent',
+            commands: [
+              `${self.__meta.name}:undo`,
+              `${self.__meta.name}:redo`,
+              `${self.__meta.name}:discard-draft`,
+              `${self.__meta.name}:publish-draft`
+            ]
+          },
+          '@apostrophecms/command-menu:mode': {
+            label: 'apostrophe:commandMenuMode',
+            commands: [
+              `${self.__meta.name}:toggle-edit-preview-mode`,
+              `${self.__meta.name}:toggle-published-draft-document`,
+              ...Object.keys(breakpointPreviewModeCommands)
+            ]
+          }
+        }
+      }
+    };
+  },
   init(self) {
     self.items = [];
     self.groups = [];
     self.groupLabels = {};
+    self.bars = [];
+    self.contextLabels = [];
     self.enableBrowserData();
   },
   handlers(self) {
@@ -68,6 +199,10 @@ module.exports = {
       // for screenreaders only. The contextUtility functionality is typically used for
       // experiences that temporarily change the current editing context.
       //
+      // If `options.user` is true, the menu bar item will appear
+      // on the user's personal dropdown, where "Log Out" appears. Such items
+      // cannot be grouped further.
+
       // If an `options.when` function is provided, it will be invoked with
       // `req` to test whether this admin bar item should be displayed or not.
 
@@ -77,8 +212,8 @@ module.exports = {
         const item = {
           name: name.indexOf(':') === -1 ? name : name.split(':')[0],
           action: name,
-          label: label,
-          permission: permission,
+          label,
+          permission,
           options: options || {}
         };
         if (options && options.after) {
@@ -159,7 +294,7 @@ module.exports = {
         self.items = self.items.concat(moving);
         // ... But then explicit order kicks in
         _.each(self.options.order || [], function (name) {
-          const item = _.find(self.items, { name: name });
+          const item = _.find(self.items, { name });
           if (item) {
             self.items = [ item ].concat(_.filter(self.items, function (item) {
               return item.name !== name;
@@ -188,7 +323,7 @@ module.exports = {
           self.groupLabels[group.items[0]] = group.label;
 
           group.items.forEach(function (name, groupIndex) {
-            const item = _.find(self.items, { name: name });
+            const item = _.find(self.items, { name });
             if (item) {
               item.menuLeader = group.items[0];
             } else {
@@ -201,7 +336,7 @@ module.exports = {
               if (indexLeader === -1) {
                 throw new Error('Admin bar grouping error: no match for ' + item.menuLeader + ' in menu item ' + item.name);
               }
-              let indexMe = _.findIndex(self.items, { name: name });
+              let indexMe = _.findIndex(self.items, { name });
               if (indexMe !== indexLeader + groupIndex) {
                 // Swap ourselves into the right position following our leader
                 if (indexLeader + groupIndex < indexMe) {
@@ -230,6 +365,12 @@ module.exports = {
         return self.apos.permission.can(req, item.permission.action, item.permission.type, 'draft');
       },
 
+      // Show admin bar for logged-in user only
+
+      getShowAdminBar(req) {
+        return !!req.user;
+      },
+
       getBrowserData(req) {
         if (!req.user) {
           return false;
@@ -250,7 +391,7 @@ module.exports = {
           }
         }
         return {
-          items: items,
+          items,
           components: { the: 'TheAposAdminBar' },
           context: context && {
             _id: context._id,
@@ -264,18 +405,82 @@ module.exports = {
             submitted: context.submitted,
             lastPublishedAt: context.lastPublishedAt,
             _edit: context._edit,
+            _publish: context._publish,
             aposMode: context.aposMode,
             aposLocale: context.aposLocale,
             aposDocId: context.aposDocId
           },
+          breakpointPreviewMode: self.apos.asset.options.breakpointPreviewMode ||
+            {
+              enable: false,
+              debug: false,
+              resizable: false,
+              screens: {}
+            },
           // Base API URL appropriate to the context document
           contextBar: context && self.apos.doc.getManager(context.type).options.contextBar,
+          showAdminBar: self.getShowAdminBar(req),
           // Simplifies frontend logic
           contextId: context && context._id,
-          tabId: cuid(),
+          tabId: createId(),
           contextEditorName,
-          pageTree: self.options.pageTree && self.apos.permission.can(req, 'edit', '@apostrophecms/any-page-type', 'draft')
+          pageTree: self.options.pageTree && self.apos.permission.can(req, 'edit', '@apostrophecms/any-page-type', 'draft'),
+          bars: self.bars,
+          contextLabels: self.contextLabels
         };
+      },
+
+      // Add custom bars and place the ones
+      // that have `last: true` at the end
+      // of the list so that they will be
+      // displayed below the others.
+      //
+      // Example:
+      //
+      // ```js
+      // self.addBar({
+      //   id: 'template',
+      //   componentName: 'TheAposTemplateBar',
+      //   props: { content: 'Some content' },
+      //   last: true
+      // });
+      // ```
+      addBar(bar) {
+        self.bars.push(bar);
+
+        self.bars.sort((a, b) => {
+          if (a.last === true && b.last === true) {
+            return 0;
+          }
+          return b.last === true ? -1 : 1;
+        });
+      },
+
+      // Add custom context labels and place the ones
+      // that have `last: true` at the end
+      // of the list so that they will be
+      // displayed after the others.
+      //
+      // Example:
+      //
+      // ```js
+      // self.addContextLabel({
+      //   id: 'myLabel'
+      //   label: 'apos:myLabel',
+      //   tooltip: 'apos:myTooltip',
+      //   last: true,
+      //   modifiers: ['apos-is-warning', 'apos-is-filled']
+      // });
+      // ```
+      addContextLabel(label) {
+        self.contextLabels.push(label);
+
+        self.contextLabels.sort((a, b) => {
+          if (a.last === true && b.last === true) {
+            return 0;
+          }
+          return b.last === true ? -1 : 1;
+        });
       }
     };
   }

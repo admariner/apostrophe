@@ -1,7 +1,8 @@
 <template>
   <li class="apos-tag-list__item">
     <button
-      :class="{'apos-is-active' : active}" class="apos-tag-list__button"
+      :class="{'apos-is-active' : active}"
+      class="apos-tag-list__button"
       @click="click(tag)"
     >
       <AposIndicator
@@ -49,32 +50,42 @@ export default {
   display: block;
   margin-bottom: 7.5px;
 }
+
 .apos-tag-list__button {
   @include apos-button-reset();
-  display: flex;
-  align-items: center;
-  padding: 2px 0;
-  border-radius: 5px;
-  background: transparent;
-  @include apos-transition(all, 0.1s, ease-in-out);
+  @include apos-transition($what: all, $duration: 0.1s, $ease: ease-in-out);
+
+  & {
+    display: flex;
+    align-items: center;
+    padding: 2px 0;
+    border-radius: 5px;
+    background: transparent;
+  }
+
   &.apos-is-active {
     color: var(--a-primary);
+
     .apos-tag-list__icon {
       opacity: 1;
     }
   }
+
   &:hover,
   &:focus {
     color: var(--a-primary);
+
     .apos-tag-list__icon {
       color: var(--a-primary);
       opacity: 1;
     }
   }
+
   &:hover.apos-is-active,
   &:focus.apos-is-active {
     color: var(--a-primary);
   }
+
   &:focus {
     outline: none;
     color: var(--a-primary-dark-15);

@@ -5,24 +5,25 @@
       'apos-is-replacing': showReplace
     }"
   >
-    <div class="apos-media-editor__inner" v-if="activeMedia">
+    <div v-if="activeMedia" class="apos-media-editor__inner">
       <div class="apos-media-editor__thumb-wrapper">
         <img
           v-if="activeMedia.attachment && activeMedia.attachment._urls"
           class="apos-media-editor__thumb"
-          :src="activeMedia.attachment._urls[restoreOnly ? 'one-sixth' : 'one-third']" :alt="activeMedia.description"
+          :src="activeMedia.attachment._urls[restoreOnly ? 'one-sixth' : 'one-third']"
+          :alt="activeMedia.description"
         >
       </div>
       <ul class="apos-media-editor__details">
-        <li class="apos-media-editor__detail" v-if="createdDate">
+        <li v-if="createdDate" class="apos-media-editor__detail">
           {{ $t('apostrophe:mediaCreatedDate', { createdDate }) }}
         </li>
-        <li class="apos-media-editor__detail" v-if="fileSize">
+        <li v-if="fileSize" class="apos-media-editor__detail">
           {{ $t('apostrophe:mediaFileSize', { fileSize }) }}
         </li>
         <li
-          class="apos-media-editor__detail"
           v-if="activeMedia.attachment && activeMedia.attachment.width"
+          class="apos-media-editor__detail"
         >
           {{
             $t('apostrophe:mediaDimensions', {
@@ -35,21 +36,24 @@
       <ul class="apos-media-editor__links">
         <li class="apos-media-editor__link" aria-hidden="true">
           <AposButton
-            type="quiet" label="apostrophe:replace"
+            type="quiet"
+            label="apostrophe:replace"
+            :disabled="isArchived"
             @click="showReplace = true"
-            :disabled="isArchived"
           />
         </li>
-        <li class="apos-media-editor__link" v-if="activeMedia.attachment && activeMedia.attachment._urls">
+        <li v-if="activeMedia.attachment && activeMedia.attachment._urls" class="apos-media-editor__link">
           <AposButton
-            type="quiet" label="apostrophe:view"
+            type="quiet"
+            label="apostrophe:view"
+            :disabled="isArchived"
             @click="viewMedia"
-            :disabled="isArchived"
           />
         </li>
-        <li class="apos-media-editor__link" v-if="activeMedia.attachment && activeMedia.attachment._urls">
+        <li v-if="activeMedia.attachment && activeMedia.attachment._urls" class="apos-media-editor__link">
           <AposButton
-            type="quiet" label="apostrophe:download"
+            type="quiet"
+            label="apostrophe:download"
             :href="!isArchived ? activeMedia.attachment._urls.original : false"
             :disabled="isArchived"
             download
@@ -58,16 +62,16 @@
       </ul>
       <AposSchema
         v-if="docFields.data.title !== undefined"
-        :schema="schema"
+        ref="schema"
         v-model="docFields"
+        :schema="schema"
         :modifiers="['small', 'inverted']"
         :trigger-validation="triggerValidation"
         :doc-id="docFields.data._id"
         :following-values="followingValues()"
+        :server-errors="serverErrors"
         @validate="triggerValidate"
         @reset="$emit('modified', false)"
-        ref="schema"
-        :server-errors="serverErrors"
       />
     </div>
     <AposModalLip :refresh="lipKey">
@@ -84,13 +88,15 @@
             modifiers: [ 'small', 'no-motion' ]
           }"
           :menu="moreMenu"
-          @item-clicked="moreMenuHandler"
           menu-placement="top-end"
+          @item-clicked="moreMenuHandler"
         />
         <AposButton
-          @click="save" class="apos-media-editor__save"
+          class="apos-media-editor__save"
           :disabled="docFields.hasErrors"
-          :label="restoreOnly ? 'apostrophe:restore' : 'apostrophe:save'" type="primary"
+          :label="restoreOnly ? 'apostrophe:restore' : 'apostrophe:save'"
+          type="primary"
+          @click="save"
         />
       </div>
     </AposModalLip>
@@ -106,7 +112,7 @@ import { klona } from 'klona';
 import dayjs from 'dayjs';
 import { isEqual } from 'lodash';
 import advancedFormat from 'dayjs/plugin/advancedFormat';
-import cuid from 'cuid';
+import { createId } from '@paralleldrive/cuid2';
 
 dayjs.extend(advancedFormat);
 
@@ -117,12 +123,6 @@ export default {
       type: Object,
       default() {
         return {};
-      }
-    },
-    selected: {
-      type: Array,
-      default() {
-        return [];
       }
     },
     isModified: {
@@ -139,7 +139,7 @@ export default {
       }
     }
   },
-  emits: [ 'saved', 'back', 'modified' ],
+  emits: [ 'back', 'modified' ],
   data() {
     return {
       // Primarily use `activeMedia` to support hot-swapping image docs.
@@ -158,7 +158,7 @@ export default {
       return window.apos.modules[this.activeMedia.type] || {};
     },
     canLocalize() {
-      return (Object.keys(apos.i18n.locales).length > 1) && this.moduleOptions.localized && this.activeMedia._id;
+      return this.moduleOptions.canLocalize && this.activeMedia._id;
     },
     moreMenu() {
       const menu = [ {
@@ -171,7 +171,7 @@ export default {
           action: 'localize'
         });
       }
-      if (this.activeMedia._id && !this.restoreOnly) {
+      if (this.activeMedia._id && this.activeMedia._delete && !this.restoreOnly) {
         menu.push({
           label: 'apostrophe:archiveImage',
           action: 'archive',
@@ -209,11 +209,14 @@ export default {
       return dayjs(this.activeMedia.attachment.createdAt).format(this.$t('apostrophe:dayjsMediaCreatedDateFormat'));
     },
     isArchived() {
-      return this.media.archived;
+      // ?. necessary to avoid reference to null due to
+      // race condition when toggling selection off
+      return this.media?.archived;
     }
   },
   watch: {
     'docFields.data': {
+      deep: true,
       handler(newData, oldData) {
         this.$nextTick(() => {
           // If either old or new state are an empty object, it's not "modified."
@@ -248,6 +251,7 @@ export default {
       this[action]();
     },
     async updateActiveDoc(newMedia) {
+      newMedia = newMedia || {};
       this.showReplace = false;
       this.activeMedia = klona(newMedia);
       this.restoreOnly = !!this.activeMedia.archived;
@@ -284,60 +288,63 @@ export default {
       });
       await this.cancel();
     },
-    save() {
+    async save() {
       this.triggerValidation = true;
       const route = `${this.moduleOptions.action}/${this.activeMedia._id}`;
       // Repopulate `attachment` since it was removed from the schema.
       this.docFields.data.attachment = this.activeMedia.attachment;
 
-      this.$nextTick(async () => {
-        if (this.docFields.hasErrors) {
-          this.triggerValidation = false;
-          await apos.notify('apostrophe:resolveErrorsBeforeSaving', {
-            type: 'warning',
-            icon: 'alert-circle-icon',
-            dismiss: true
-          });
-          return;
-        }
+      await this.$nextTick();
 
-        let body = this.docFields.data;
-        this.addLockToRequest(body);
-        try {
-          const requestMethod = this.restoreOnly ? apos.http.patch : apos.http.put;
-          if (this.restoreOnly) {
-            body = {
-              archived: false
-            };
-          }
-          const doc = await requestMethod(route, {
-            busy: true,
-            body,
-            draft: true
-          });
-          apos.bus.$emit('content-changed', {
-            doc,
-            action: 'update'
-          });
-          this.original = klona(this.docFields.data);
-          this.$emit('modified', false);
-          this.$emit('saved');
-        } catch (e) {
-          if (this.isLockedError(e)) {
-            await this.showLockedError(e);
-            this.lockNotAvailable();
-          } else {
-            await this.handleSaveError(e, {
-              fallback: `Error ${this.restoreOnly ? 'Restoring' : 'Saving'} ${this.moduleLabels.label}`
-            });
-          }
-        } finally {
-          this.showReplace = false;
+      if (this.docFields.hasErrors) {
+        this.triggerValidation = false;
+        await apos.notify('apostrophe:resolveErrorsBeforeSaving', {
+          type: 'warning',
+          icon: 'alert-circle-icon',
+          dismiss: true
+        });
+        return;
+      }
+
+      let body = this.docFields.data;
+      this.addLockToRequest(body);
+      try {
+        const requestMethod = this.restoreOnly ? apos.http.patch : apos.http.put;
+        if (this.restoreOnly) {
+          body = {
+            archived: false
+          };
         }
-      });
+        const doc = await requestMethod(route, {
+          busy: true,
+          body,
+          draft: true
+        });
+        apos.bus.$emit('content-changed', {
+          doc,
+          action: 'update'
+        });
+        this.original = klona(this.docFields.data);
+      } catch (e) {
+        if (this.isLockedError(e)) {
+          await this.showLockedError(e);
+          this.lockNotAvailable();
+        } else {
+          const errorMessage = this.restoreOnly
+            ? this.$t('apostrophe:mediaManagerErrorRestoring')
+            : this.$t('apostrophe:mediaManagerErrorSaving');
+
+          await this.handleSaveError(e, {
+            fallback: `${errorMessage} ${this.moduleLabels.label}`
+          });
+        }
+      } finally {
+        this.showReplace = false;
+
+      }
     },
     generateLipKey() {
-      this.lipKey = cuid();
+      this.lipKey = createId();
     },
     cancel() {
       this.showReplace = false;
@@ -383,54 +390,69 @@ export default {
     position: relative;
     height: 100%;
     padding: 20px;
+
+    &__inner {
+      padding-bottom: 44px;
+    }
   }
 
   .apos-media-editor__thumb-wrapper {
     display: flex;
-    justify-content: center;
     align-items: center;
+    justify-content: center;
     height: 180px;
-    border: 1px solid var(--a-base-7);
     margin-bottom: 20px;
+    border: 1px solid var(--a-base-7);
   }
+
   .apos-media-editor__thumb {
     max-width: 100%;
     max-height: 100%;
   }
 
-  .apos-media-editor ::v-deep .apos-field {
+  .apos-media-editor :deep(.apos-field) {
     margin-bottom: $spacing-double;
   }
 
   .apos-media-editor__details {
     @include apos-list-reset();
-    margin-bottom: $spacing-double;
+
+    & {
+      margin-bottom: $spacing-double;
+    }
   }
 
   .apos-media-editor__detail {
     @include type-base;
-    line-height: var(--a-line-tallest);
-    color: var(--a-base-4);
+
+    & {
+      line-height: var(--a-line-tallest);
+      color: var(--a-base-4);
+    }
   }
 
   .apos-media-editor__links {
     @include apos-list-reset();
-    display: flex;
-    margin-bottom: $spacing-triple;
 
-    ::v-deep .apos-button--quiet {
+    & {
+      display: flex;
+      margin-bottom: $spacing-triple;
+    }
+
+    :deep(.apos-button--quiet) {
       display: inline;
     }
   }
 
   .apos-media-editor__link {
     display: inline-block;
+
     & + & {
       margin-left: 20px;
     }
   }
 
-  ::v-deep [data-apos-field='attachment'] {
+  :deep([data-apos-field='attachment']) {
     .apos-media-editor:not(.apos-is-replacing) & {
       position: absolute;
       left: -999rem;
@@ -445,6 +467,8 @@ export default {
   .apos-media-editor__lip {
     display: flex;
     justify-content: flex-end;
+    line-height: var(--a-line-base);
+
     & > .apos-context-menu, & > .apos-button__wrapper {
       margin-left: 7.5px;
     }

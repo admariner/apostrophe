@@ -3,12 +3,17 @@
     "apostrophe",
     "plugin:vue/vue3-recommended"
   ],
+  "env": {
+    "mocha": true
+  },
   "globals": {
     "apos": true
   },
   "rules": {
+    "max-len": "off",
     "no-var": "error",
     "no-console": 0,
+    "vue/no-deprecated-v-on-native-modifier": 0,
     "multiline-ternary": "off",
     "no-unused-vars": [
       "error",
@@ -30,8 +35,7 @@
     "vue/max-attributes-per-line": [
       "warn",
       {
-        "singleline": 2,
-        "multiline": 2
+        "singleline": 2
       }
     ],
     "vue/singleline-html-element-content-newline": [
@@ -47,10 +51,20 @@
           "textarea"
         ]
       }
-    ],
-    "vue/attributes-order": 0
+    ]
   },
   "overrides": [
+    {
+      "files": "*.vue",
+      "globals": {
+        "defineProps": "readonly",
+        "defineEmits": "readonly",
+        "defineExpose": "readonly",
+        "defineOptions": "readonly",
+        "defineModel": "readonly",
+        "defineSlots": "readonly"
+      }
+    },
     {
       "files": [
         "**/ui/**/*.js"

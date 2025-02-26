@@ -12,7 +12,7 @@ export default {
       lockApiUrl: null
     };
   },
-  async destroyed () {
+  async unmounted () {
     await this.unlock();
   },
   methods: {
@@ -47,7 +47,8 @@ export default {
         if (this.isLockedError(e)) {
           if (await apos.confirm({
             heading: e.body.data.me ? 'apostrophe:docInUseBySelf' : 'apostrophe:docInUseByAnother',
-            description: e.body.data.me ? 'apostrophe:takeControlFromSelf' : 'apostrophe:takeControlFromOther',
+            description: e.body.data.me ? 'apostrophe:takeControlFromSelf' : 'apostrophe:takeControlFromOther'
+          }, {
             interpolate: {
               who: e.body.data.title
             }
@@ -68,7 +69,7 @@ export default {
               return true;
             } catch (e) {
               await apos.notify(e.message, {
-                type: 'error',
+                type: 'danger',
                 localize: false
               });
               return false;

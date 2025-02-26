@@ -24,7 +24,7 @@ export default {
           body: {},
           busy: true
         });
-        apos.notify('apostrophe:changesPublished', {
+        await apos.notify('apostrophe:changesPublished', {
           type: 'success',
           dismiss: true,
           icon: 'check-all-icon',
@@ -42,7 +42,8 @@ export default {
         });
         apos.bus.$emit('content-changed', {
           doc,
-          action: 'publish'
+          action: 'publish',
+          localeSwitched: Boolean(this.localeSwitched)
         });
         return doc;
       } catch (e) {
@@ -65,9 +66,10 @@ export default {
               // Retry now that ancestors are published
               return this.publish(doc);
             } catch (e) {
+              const errorMessage = e.name === 'forbidden' ? 'apostrophe:errorWhilePublishingParentPageForbidden' : e.message;
               await apos.alert({
                 heading: this.$t('apostrophe:errorWhilePublishing'),
-                description: e.message || this.$t('apostrophe:errorWhilePublishingParentPage'),
+                description: errorMessage || this.$t('apostrophe:errorWhilePublishingParentPage'),
                 localize: false
               });
             }
@@ -90,13 +92,14 @@ export default {
           body: {},
           busy: true
         });
-        apos.notify('apostrophe:noLongerPublished', {
+        await apos.notify('apostrophe:noLongerPublished', {
           type: 'success',
           dismiss: true
         });
         apos.bus.$emit('content-changed', {
           doc,
-          action: 'unpublish'
+          action: 'unpublish',
+          localeSwitched: Boolean(this.localeSwitched)
         });
         return doc;
       } catch (e) {
@@ -118,14 +121,20 @@ export default {
           body: {},
           draft: true
         });
-        apos.notify('apostrophe:submittedForReview', {
+        const newDoc = {
+          ...doc,
+          submitted
+        };
+        await apos.notify('apostrophe:submittedForReview', {
           type: 'success',
           icon: 'list-status-icon',
           dismiss: true
         });
+
         apos.bus.$emit('content-changed', {
-          doc: submitted,
-          action: 'submit'
+          doc: newDoc,
+          action: 'submit',
+          localeSwitched: Boolean(this.localeSwitched)
         });
         return submitted;
       } catch (e) {
@@ -146,18 +155,19 @@ export default {
           body: {},
           busy: true
         });
-        apos.notify('apostrophe:dismissedSubmission', {
+        await apos.notify('apostrophe:dismissedSubmission', {
           type: 'success',
           dismiss: true,
           icon: 'close-circle-icon'
         });
-        doc = {
+        const newDoc = {
           ...doc,
           submitted: null
         };
         apos.bus.$emit('content-changed', {
-          doc,
-          action: 'dismiss-submission'
+          doc: newDoc,
+          action: 'dismiss-submission',
+          localeSwitched: Boolean(this.localeSwitched)
         });
       } catch (e) {
         await apos.alert({
@@ -198,14 +208,15 @@ export default {
               body: {},
               busy: true
             });
-            apos.notify('apostrophe:draftDiscarded', {
+            await apos.notify('apostrophe:draftDiscarded', {
               type: 'success',
               dismiss: true,
               icon: 'text-box-remove-icon'
             });
             apos.bus.$emit('content-changed', {
               doc: newDoc,
-              action: 'revert-draft-to-published'
+              action: 'revert-draft-to-published',
+              localeSwitched: Boolean(this.localeSwitched)
             });
             return {
               doc: newDoc
@@ -215,13 +226,14 @@ export default {
               body: {},
               busy: true
             });
-            apos.notify('apostrophe:draftDeleted', {
+            await apos.notify('apostrophe:draftDeleted', {
               type: 'success',
               dismiss: true
             });
             apos.bus.$emit('content-changed', {
               doc,
-              action: 'delete'
+              action: 'delete',
+              localeSwitched: Boolean(this.localeSwitched)
             });
             return {};
           }

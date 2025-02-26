@@ -27,6 +27,7 @@
 
 const { SemanticAttributes } = require('@opentelemetry/semantic-conventions');
 const _ = require('lodash');
+const fs = require('fs');
 
 module.exports = {
 
@@ -56,6 +57,7 @@ module.exports = {
 
     self.__helpers = {};
     self.templateData = self.options.templateData || {};
+    self.__structuredLoggingEnabled = false;
 
     if (self.apos.asset) {
       if (!self.apos.asset.chains) {
@@ -73,6 +75,11 @@ module.exports = {
     // Routes in their final ready-to-add-to-Express form
     self._routes = [];
 
+    // Enable structured logging after util module is initialized.
+    if (self.apos.util && (self.apos.util !== self)) {
+      self.__structuredLoggingEnabled = true;
+    }
+
     // Add i18next phrases if we started up after the i18n module,
     // which will call this for us if we start up before it
     if (self.apos.i18n && (self.apos.i18n !== self)) {
@@ -88,6 +95,10 @@ module.exports = {
 
   methods(self) {
     return {
+      // `self.logInfo`, `self.logError`, etc. available for every module except
+      // `error`, `util` and the `log` module itself.
+      ...require('./lib/log')(self),
+
       compileSectionRoutes(section) {
         _.each(self[section] || {}, function(routes, method) {
           _.each(routes, function(config, name) {
@@ -230,18 +241,35 @@ module.exports = {
           });
         }
         const response = getResponse(err);
-        // err.stack includes basic description of error
-        if (Object.keys(response.data).length > 1) {
-          response.fn(`${req.method} ${req.url}: \n\n${err.stack}\n\n${JSON.stringify(response.data, null, '  ')}`);
-        } else {
-          response.fn(req.method + ' ' + req.url + ': ' + '\n\n' + err.stack);
-        }
+        logError(req, response, err);
         req.res.status(response.code);
         return req.res.send({
           name: response.name,
           data: response.data,
           message: response.message
         });
+        function logError(req, response, error) {
+          const typeTrail = response.code === 500 ? '' : `-${response.name}`;
+          // Log the actual error, not the message meant for the browser.
+          const msg = response.code === 500
+            ? err.message
+            : response.message;
+          try {
+            self.logError(req, `api-error${typeTrail}`, msg, {
+              name: response.name,
+              status: response.code,
+              stack: (error.stack || '').split('\n').slice(1).map(line => line.trim()),
+              cause: error.cause,
+              errorPath: response.path,
+              data: response.data
+            });
+          } catch (e) {
+            // We can't afford to throw here, it would hang the response.
+            e.message = 'Structured logging error: ' + e.message;
+            // eslint-disable-next-line no-console
+            console.error(e);
+          }
+        }
         function getResponse(err) {
           let name, data, code, fn, message, path;
           if (err && err.name && self.apos.http.errors[err.name]) {
@@ -352,8 +380,8 @@ module.exports = {
         return self.apos.template.renderStringForModule(req, s, data, self);
       },
 
-      // TIP: you probably want `self.sendPage`, which loads
-      // `data.home` for you and also sends the response to the browser.
+      // TIP: more often you will want `self.sendPage`, which also sends the response
+      // to the browser.
       //
       // This method generates a complete HTML page for transmission to the
       // browser. Returns HTML markup ready to send (but `self.sendPage` is
@@ -391,13 +419,25 @@ module.exports = {
       // `data.query` (req.query)
       //
       // This method is async in 3.x and must be awaited.
+      //
+      // If the external front feature is in use for the request, then
+      // self.apos.template.annotateDataForExternalFront and
+      // self.apos.template.pruneDataForExternalFront are called
+      // and the data is returned, in place of normal Nunjucks rendering.
+      //
+      // No longer deprecated because it is a useful override point
+      // for this part of the behavior of sendPage.
 
       async renderPage(req, template, data) {
-        // TODO Remove in next major version.
-        self.apos.util.warnDevOnce(
-          'deprecate-renderPage',
-          'self.renderPage() is deprecated. Use self.sendPage() instead.'
-        );
+        await self.apos.page.emit('beforeSend', req);
+        await self.apos.area.loadDeferredWidgets(req);
+        if (req.aposExternalFront) {
+          data = self.apos.template.getRenderDataArgs(req, data, self);
+          await self.apos.template.annotateDataForExternalFront(req, template, data, self.__meta.name);
+          self.apos.template.pruneDataForExternalFront(req, template, data, self.__meta.name);
+          // Reply with JSON
+          return data;
+        }
         return self.apos.template.renderPageForModule(req, template, data, self);
       },
 
@@ -453,11 +493,8 @@ module.exports = {
           span.setAttribute(telemetry.Attributes.TEMPLATE, template);
 
           try {
-            await self.apos.page.emit('beforeSend', req);
-            await self.apos.area.loadDeferredWidgets(req);
-            req.res.send(
-              await self.apos.template.renderPageForModule(req, template, data, self)
-            );
+            const result = await self.renderPage(req, template, data);
+            req.res.send(result);
             span.setStatus({ code: telemetry.api.SpanStatusCode.OK });
           } catch (err) {
             telemetry.handleError(span, err);
@@ -759,6 +796,62 @@ module.exports = {
           typeof aposShareKey === 'string' &&
           aposShareKey.length
         );
+      },
+
+      // Given a name such as "placeholder", look at the
+      // relevant options (nameImage and, as a fallback, nameUrl)
+      // and determine the appropriate asset URL. If nameImage is used,
+      // search the inheritance chain of the module
+      // for the best match, e.g. a file in a project-level override
+      // wins, followed by the original module in core or npm,
+      // followed by something in a base class that extends, etc.
+      // If no file is found, the method returns `undefined`.
+      //
+      // Even if `nameUrl is used, the method still corrects paths
+      // beginning with `/module` to account for the actual asset
+      // release URL (`nameUrl` is really an asset path, but for bc
+      // this is the naming pattern).
+      //
+      // In the above examples "name" should be replaced with the
+      // actual value of the name argument.
+
+      determineBestAssetUrl(name) {
+        let urlOption = self.options[`${name}Url`];
+        const imageOption = self.options[`${name}Image`];
+        if (!urlOption) {
+          // Webpack and the legacy asset pipeline
+          if (imageOption && !self.apos.asset.hasBuildModule()) {
+            const chain = [ ...self.__meta.chain ].reverse();
+            for (const entry of chain) {
+              const path = `${entry.dirname}/public/${name}.${imageOption}`;
+              if (fs.existsSync(path)) {
+                urlOption = `/modules/${entry.name}/${name}.${imageOption}`;
+                break;
+              }
+            }
+          }
+          // The new external module asset pipeline
+          if (imageOption && self.apos.asset.hasBuildModule()) {
+            urlOption = `/modules/${self.__meta.name}/${name}.${imageOption}`;
+          }
+        }
+        if (urlOption && urlOption.startsWith('/modules')) {
+          urlOption = self.apos.asset.url(urlOption);
+        }
+        if (urlOption) {
+          self.options[`${name}Url`] = urlOption;
+        }
+      },
+
+      // Modules that have REST APIs use this method
+      // to determine if a request is qualified to access
+      // it without restriction to the `publicApiProjection`
+      canAccessApi(req) {
+        if (self.options.guestApiAccess) {
+          return !!req.user;
+        } else {
+          return self.apos.permission.can(req, 'view-draft');
+        }
       },
 
       // Merge in the event emitter / responder capabilities

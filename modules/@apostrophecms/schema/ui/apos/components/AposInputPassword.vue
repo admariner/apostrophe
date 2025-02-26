@@ -1,21 +1,24 @@
 <template>
   <AposInputWrapper
-    :modifiers="modifiers" :field="field"
-    :error="effectiveError" :uid="uid"
+    :modifiers="modifiers"
+    :field="field"
+    :error="effectiveError"
+    :uid="uid"
     :display-options="displayOptions"
   >
     <template #body>
       <div class="apos-input-wrapper">
         <input
+          :id="uid"
+          v-model="next"
           type="password"
           class="apos-input apos-input--password"
-          v-model="next"
           :placeholder="$t(field.placeholder)"
           :disabled="field.readOnly"
           :required="field.required"
-          :id="uid"
           :tabindex="tabindex"
-          @keydown.enter="$emit('return')"
+          :autocomplete="field.autocomplete"
+          @keydown.enter="emitReturn"
         >
       </div>
     </template>
@@ -23,44 +26,10 @@
 </template>
 
 <script>
-import AposInputMixin from 'Modules/@apostrophecms/schema/mixins/AposInputMixin';
-
+import AposInputPasswordLogic from '../logic/AposInputPassword';
 export default {
   name: 'AposInputPassword',
-  mixins: [ AposInputMixin ],
-  emits: [ 'return' ],
-  computed: {
-    tabindex () {
-      return this.field.disableFocus ? '-1' : '0';
-    }
-  },
-  methods: {
-    validate(value) {
-      if (this.field.required) {
-        if (!value.length) {
-          return { message: 'required' };
-        }
-      }
-      if (this.field.min) {
-        if (value.length && (value.length < this.field.min)) {
-          return {
-            message: this.$t('apostrophe:passwordErrorMin', {
-              min: this.field.min
-            })
-          };
-        }
-      }
-      if (this.field.max) {
-        if (value.length && (value.length > this.field.max)) {
-          return {
-            message: this.$t('apostrophe:passwordErrorMax', {
-              max: this.field.max
-            })
-          };
-        }
-      }
-      return false;
-    }
-  }
+  mixins: [ AposInputPasswordLogic ],
+  emits: [ 'return' ]
 };
 </script>

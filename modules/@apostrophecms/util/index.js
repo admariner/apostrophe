@@ -5,7 +5,7 @@
 
 // ## Options
 //
-// ### `logger`
+// ### `logger` (LEGACY)
 //
 // A function which accepts `apos` and returns an object with
 // at least `info`, `debug`, `warn` and `error` methods. These methods should
@@ -16,18 +16,24 @@
 // `apos.util.error`, etc. are routed through this object
 // by Apostrophe. This provides compatibility out of
 // the box with many popular logging modules, including `winston`.
+// NOTE: this option is deprecated, you should configure `@apostrophecms/log`
+// module instead. This option will still work for BC reasons, but switching
+// to structured logging and module `self.logInfo()`, `self.logError()`, etc
+// is highly recommended.
+// Read more in the`@apostrophecms/log` module documentation.
 
 const _ = require('lodash');
 const he = require('he');
 _.str = require('underscore.string');
 const XRegExp = require('xregexp').XRegExp;
 const crypto = require('crypto');
-const cuid = require('cuid');
+const { createId } = require('@paralleldrive/cuid2');
 const fs = require('fs');
 const now = require('performance-now');
 const Promise = require('bluebird');
 const util = require('util');
 const { stripIndent } = require('common-tags');
+const glob = require('../../../lib/glob.js');
 
 module.exports = {
   options: {
@@ -46,13 +52,24 @@ module.exports = {
     self.warnedDev = {};
     return self.enableLogger();
   },
+  handlers(self) {
+    return {
+      'apostrophe:destroy': {
+        async destroyLogger() {
+          if (self.logger.destroy) {
+            await self.logger.destroy();
+          }
+        }
+      }
+    };
+  },
   methods(self) {
     return {
       // generate a unique identifier for a new page or other object.
-      // IDs are generated with the cuid module which prevents
+      // IDs are generated with the cuid2 module which prevents
       // collisions and easy guessing of another's ID.
       generateId() {
-        return cuid();
+        return createId();
       },
       // Globally replace a string with another string.
       // Regular `String.replace` does NOT offer global replace, except
@@ -504,7 +521,20 @@ module.exports = {
         }
       },
       enableLogger() {
-        self.logger = self.options.logger ? self.options.logger(self.apos) : require('./lib/logger.js')(self.apos);
+        // Legacy, configured via this module.
+        if (self.options.logger) {
+          self.logger = self.options.logger(self.apos);
+          return;
+        }
+        // New, configured via the `log` module.
+        const logOpts = self.apos.structuredLog.options;
+        if (logOpts.logger) {
+          self.logger = typeof logOpts.logger === 'function'
+            ? logOpts.logger(self.apos)
+            : logOpts.logger;
+          return;
+        }
+        self.logger = require('./lib/logger.js')(self.apos);
       },
       // Log a message. The default
       // implementation wraps `console.log` and passes on
@@ -517,11 +547,12 @@ module.exports = {
       // If the logger has no `log` method, the `info` method
       // is used. This allows an instance of `bole` or similar
       // to be used directly.
-      log(msg) {
+      log(...args) {
+        // kept for bc
         if (!self.logger.log) {
-          return self.logger.info.apply(self.logger.info, arguments);
+          return self.logger.info(...self.convertLegacyLogPayload(args));
         }
-        self.logger.log.apply(self.logger, arguments);
+        self.logger.log(...self.convertLegacyLogPayload(args));
       },
       // Log an informational message. The default
       // implementation wraps `console.info` and passes on
@@ -530,8 +561,8 @@ module.exports = {
       // Overrides should be written with support for
       // substitution strings in mind. See the
       // `console.log` documentation.
-      info(msg) {
-        self.logger.info.apply(self.logger, arguments);
+      info(...args) {
+        self.logger.info(...self.convertLegacyLogPayload(args));
       },
       // Log a debug message. The default implementation wraps
       // `console.debug` if available, otherwise `console.log`,
@@ -540,8 +571,8 @@ module.exports = {
       // Overrides should be written with support for
       // substitution strings in mind. See the
       // `console.warn` documentation.
-      debug(msg) {
-        self.logger.debug.apply(self.logger, arguments);
+      debug(...args) {
+        self.logger.debug(...self.convertLegacyLogPayload(args));
       },
       // Log a warning. The default implementation wraps
       // `console.warn` and passes on all arguments,
@@ -554,21 +585,27 @@ module.exports = {
       // The intention is that `apos.util.warn` should be
       // called for situations less dire than
       // `apos.util.error`.
-      warn(msg) {
-        self.logger.warn.apply(self.logger, arguments);
+      warn(...args) {
+        self.logger.warn(...self.convertLegacyLogPayload(args));
       },
 
-      // Identical to `apos.util.warn`, except that the warning is
-      // not displayed if `process.env.NODE_ENV` is `production`.
+      // Identical to `apos.util.warn`, except that (1) the warning is
+      // not displayed if `process.env.NODE_ENV` is `production`, and
+      // (2) if the warning's first argument is a message it is
+      // automatically prefixed with a warning icon.
+      //
       // Also see `warnDevOnce` which is less likely to irritate
       // the developer until they stop paying attention.
 
-      warnDev(msg) {
+      warnDev(...args) {
         if (process.env.NODE_ENV === 'production') {
           return;
         }
-        const args = [ '\n⚠️', ...arguments ];
-        self.warn.apply(self, args);
+        const m = args[0];
+        if ((typeof m) === 'string') {
+          args[0] = `⚠️  ${m}`;
+        }
+        self.warn(...args);
       },
 
       // Identical to `apos.util.warnDev`, except that the warning is
@@ -578,7 +615,7 @@ module.exports = {
       // `--all-[name]` is present on the command line. You can
       // also suppress these with `--ignore-[name]`.
 
-      warnDevOnce(name, msg) {
+      warnDevOnce(name, ...args) {
         const always = self.apos.argv[`all-${name}`];
         const hide = self.apos.argv[`ignore-${name}`];
         if (hide) {
@@ -588,13 +625,13 @@ module.exports = {
           return;
         }
         if (always || (!self.warnedDev[name])) {
-          self.warn.apply(self, Array.prototype.slice.call(arguments, 1));
+          self.warnDev(...args);
           if (!always) {
             self.warnedDev[name] = true;
             self.info(stripIndent`
               This warning appears only once to save space. Pass --all-${name}
               on the command line to see the warning for all cases.
-            `);
+            ` + '\n');
           }
         }
       },
@@ -606,8 +643,8 @@ module.exports = {
       // Overrides should be written with support for
       // substitution strings in mind. See the
       // `console.error` documentation.
-      error(msg) {
-        self.logger.error.apply(self.logger, arguments);
+      error(...args) {
+        self.logger.error(...self.convertLegacyLogPayload(args));
       },
       // Performance profiling method. At the start of the operation you want
       // to profile, call with req (may be null or omitted entirely) and a
@@ -799,6 +836,66 @@ module.exports = {
           return self.apos.util.cloneReq(result, properties);
         };
         return result;
+      },
+      pipe: (...functions) => (initial) => functions.reduce((accumulator, current) => current(accumulator), initial),
+      merge(...objects) {
+        const concatArrays = (objValue, srcValue) => {
+          if (Array.isArray(objValue)) {
+            return objValue.concat(srcValue);
+          }
+        };
+
+        return _.mergeWith({}, ...objects, concatArrays);
+      },
+      omit(source, keys) {
+        return _.omit(source, keys);
+      },
+      // A wrapper for glob 10.x with the sorting semantics of glob
+      // 8.x, as a drop-in replacement to avoid introducing bc issues
+      // in existing Apostrophe logic. Not guaranteed to cover
+      // every difference between glob 8.x and 10.x, just those
+      // that break Apostrophe startup
+      glob(pattern, options = {}) {
+        return glob(pattern, options);
+      },
+      // Internal method. Attempt to convert the log payload to an object
+      // for legacy calls and when `@apostrophecms/log` has been configured
+      // with `messageAs: 'someKey'`.
+      // This change is backwards compatible with the previous behavior because
+      // `messageAs` is a newly introduced option. Custom loggers should adapt
+      // to this change when using `messageAs`.
+      // `args` is the argument array passed to the any log method.
+      // The result (when required) is an array with a single object.
+      // First string argument (if available) is used as `message`.
+      // First object argument is used as result object.
+      // All other arguments are passed as `args` property of the result object.
+      convertLegacyLogPayload(args) {
+        const messageAs = self.apos.structuredLog.options.messageAs;
+        if (!messageAs || args.length === 0) {
+          return args;
+        }
+        // Already formatted by the structured log module. Nothing we can do if not.
+        if (args.length === 1 && _.isPlainObject(args[0])) {
+          return args;
+        }
+
+        // Should also handle apos.util.warnDev() calls.
+        const messageIndex = args
+          .findIndex(arg => typeof arg === 'string' && arg.trim() && arg !== '\n⚠️ ');
+        const firstObjectIndex = args.findIndex(arg => _.isPlainObject(arg));
+        const message = messageIndex !== -1 ? args[messageIndex] : null;
+        const firstObject = firstObjectIndex !== -1 ? { ...args[firstObjectIndex] } : {};
+
+        if (message) {
+          firstObject[messageAs] = message;
+        }
+        const rest = args
+          .filter((arg, index) => ![ messageIndex, firstObjectIndex ].includes(index));
+        if (rest.length) {
+          firstObject.args = rest;
+        }
+
+        return [ firstObject ];
       }
     };
   },

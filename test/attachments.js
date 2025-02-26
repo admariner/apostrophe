@@ -3,9 +3,9 @@ const assert = require('assert');
 const fs = require('fs-extra');
 const path = require('path');
 
-let apos;
-
 describe('Attachment', function() {
+
+  let apos;
 
   after(async function() {
     await wipeIt();
@@ -201,7 +201,7 @@ describe('Attachment', function() {
         extension: 'jpg',
         _id: 'test'
       });
-      assert(url === '/uploads/attachments/test-test.full.jpg');
+      assert.strictEqual(url, '/uploads/attachments/test-test.full.jpg');
     });
 
     it('should generate the "one-half" URL when one-half size specified for image', function() {
@@ -441,6 +441,11 @@ describe('Attachment', function() {
       });
 
       assert(height === 400);
+    });
+
+    it('should generate an appropriate missing attachment url', function() {
+      const url = apos.attachment.url(null);
+      assert.strictEqual(url, '/apos-frontend/default/modules/@apostrophecms/attachment/img/missing-icon.svg');
     });
   });
 });

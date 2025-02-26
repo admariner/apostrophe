@@ -5,8 +5,11 @@ module.exports = {
     pluralLabel: 'apostrophe:imageTags',
     quickCreate: false,
     autopublish: true,
+    versions: true,
     editRole: 'editor',
-    publishRole: 'editor'
+    publishRole: 'editor',
+    shortcut: 'G,Shift+I',
+    relationshipSuggestionIcon: 'tag-icon'
   },
   fields: {
     remove: [ 'visibility' ]

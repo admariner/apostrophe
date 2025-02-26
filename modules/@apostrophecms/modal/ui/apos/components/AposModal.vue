@@ -1,23 +1,27 @@
 <template>
   <transition
     :name="transitionType"
+    :duration="250"
     @enter="onEnter"
     @leave="onLeave"
-    :duration="250"
   >
     <section
-      v-if="modal.active"
+      v-show="modal.active"
+      ref="modalEl"
       :class="classes"
       role="dialog"
       aria-modal="true"
-      :aria-labelledby="id"
-      ref="modalEl"
+      :aria-labelledby="props.modalData.id"
+      data-apos-modal
+      @focus.capture="captureFocus"
+      @esc="close"
+      @keydown.tab="onTab"
     >
       <transition :name="transitionType">
         <div
-          @click="close"
           v-if="modal.showModal"
           class="apos-modal__overlay"
+          @click="emit('esc')"
         />
       </transition>
       <transition :name="transitionType" @after-leave="$emit('inactive')">
@@ -35,53 +39,67 @@
               <AposSpinner :weight="'heavy'" class="apos-busy__spinner" />
             </div>
           </template>
-          <template v-else>
-            <header class="apos-modal__header" v-if="!modal.disableHeader">
+          <div
+            v-show="!renderingElements && !modal.busy"
+            class="apos-modal__content"
+            data-apos-test="modal-content"
+          >
+            <header v-if="!modal.disableHeader" class="apos-modal__header">
               <div class="apos-modal__header__main">
-                <div v-if="hasSecondaryControls" class="apos-modal__controls--secondary">
+                <div v-if="hasSlot('secondaryControls')" class="apos-modal__controls--secondary">
                   <slot name="secondaryControls" />
                 </div>
-                <h2 :id="id" class="apos-modal__heading">
+                <h2 :id="props.modalData.id" class="apos-modal__heading">
                   <span v-if="modal.a11yTitle" class="apos-sr-only">
                     {{ $t(modal.a11yTitle) }}
                   </span>
                   {{ $t(modalTitle) }}
                 </h2>
-                <div class="apos-modal__controls--header" v-if="hasBeenLocalized || hasPrimaryControls">
-                  <div class="apos-modal__locale" v-if="hasBeenLocalized">
-                    <span class="apos-modal__locale-label">
-                      {{ $t('apostrophe:locale') }}:
-                    </span> <span class="apos-modal__locale-name">
-                      {{ currentLocale }}
-                    </span>
+                <div
+                  v-if="hasBeenLocalized || hasSlot('primaryControls') || hasSlot('localeDisplay')"
+                  class="apos-modal__controls--header"
+                >
+                  <div v-if="hasSlot('localeDisplay')" class="apos-modal__locale">
+                    <slot name="localeDisplay" />
                   </div>
-                  <div class="apos-modal__controls--primary" v-if="hasPrimaryControls">
+                  <AposLocale
+                    v-else-if="hasBeenLocalized"
+                    class="apos-modal__locale"
+                    :locale="currentLocale"
+                  />
+                  <div v-if="hasSlot('primaryControls')" class="apos-modal__controls--primary">
                     <slot name="primaryControls" />
                   </div>
                 </div>
               </div>
-              <div class="apos-modal__breadcrumbs" v-if="hasBreadcrumbs">
+              <div v-if="hasSlot('breadcrumbs')" class="apos-modal__breadcrumbs">
                 <slot class="apos-modal__breadcrumbs" name="breadcrumbs" />
               </div>
             </header>
-            <div class="apos-modal__main" :class="gridModifier">
-              <slot v-if="hasLeftRail" name="leftRail" />
+            <div
+              class="apos-modal__main"
+              :class="gridModifier"
+            >
+              <slot name="leftRail" />
               <slot name="main" />
               <slot name="rightRail" />
             </div>
-            <footer v-if="hasFooter" class="apos-modal__footer">
+            <footer
+              v-if="hasSlot('footer')"
+              class="apos-modal__footer"
+            >
               <div class="apos-modal__footer__inner">
                 <slot name="footer" />
               </div>
             </footer>
-          </template>
+          </div>
         </div>
       </transition>
     </section>
   </transition>
 </template>
 
-<script>
+<script setup>
 // NOTE:
 // To get the desired transition effect, modal props have two properties,
 // `active` and `showModal`, which control their visibility. Basically,
@@ -91,191 +109,213 @@
 // So as the modal exits, they should change in reverse. `showModal` becomes
 // `false`, then `active` is set to `false` once the modal has finished its
 // transition.
-export default {
-  name: 'AposModal',
-  props: {
-    modal: {
-      type: Object,
-      required: true
-    },
-    modalTitle: {
-      type: [ String, Object ],
-      default: ''
-    }
-  },
-  emits: [ 'inactive', 'esc', 'show-modal', 'no-modal', 'ready' ],
-  data() {
-    return {
-      // For aria purposes
-      id: 'modal:' + Math.random().toString().replace('.', '')
-    };
-  },
-  computed: {
-    transitionType: function () {
-      if (this.modal.type === 'slide') {
-        if (this.modal.origin === 'left') {
-          return 'slide-right';
-        } else {
-          return 'slide-left';
-        }
-      } else {
-        return 'fade';
-      }
-    },
-    modalReady () {
-      return this.modal.active;
-    },
-    hasBeenLocalized: function() {
-      return Object.keys(apos.i18n.locales).length > 1;
-    },
-    currentLocale: function() {
-      return apos.i18n.locale;
-    },
-    hasPrimaryControls: function () {
-      return !!this.$slots.primaryControls;
-    },
-    hasSecondaryControls: function () {
-      return !!this.$slots.secondaryControls;
-    },
-    hasBreadcrumbs: function () {
-      return !!this.$slots.breadcrumbs;
-    },
-    hasLeftRail: function () {
-      return !!this.$slots.leftRail;
-    },
-    hasRightRail: function () {
-      return !!this.$slots.rightRail;
-    },
-    hasFooter: function () {
-      return !!this.$slots.footer;
-    },
-    classes() {
-      const classes = [ 'apos-modal' ];
-      classes.push(`apos-modal--${this.modal.type}`);
-      if (this.modal.type === 'slide') {
-        if (this.modal.origin) {
-          classes.push(`apos-modal--origin-${this.modal.origin}`);
-        } else {
-          classes.push('apos-modal--origin-right');
-        }
-        classes.push('apos-modal--full-height');
-      }
-      if (this.modal.busy) {
-        classes.push('apos-modal--busy');
-      }
-      return classes.join(' ');
-    },
-    innerClasses() {
-      const classes = [];
-      if (this.modal.width) {
-        classes.push(`apos-modal__inner--${this.modal.width}`);
-      };
-      return classes;
-    },
-    gridModifier() {
-      if (this.hasLeftRail && this.hasRightRail) {
-        return 'apos-modal__main--with-rails';
-      }
-      if (this.hasLeftRail && !this.hasRightRail) {
-        return 'apos-modal__main--with-left-rail';
-      }
-      if (!this.hasLeftRail && this.hasRightRail) {
-        return 'apos-modal__main--with-right-rail';
-      }
-      return false;
-    }
-  },
-  watch: {
-    modalReady (newVal) {
-      this.$nextTick(() => {
-        if (newVal && this.modal.trapFocus && this.$refs.modalEl) {
-          this.trapFocus();
-        }
-      });
-    }
-  },
-  methods: {
-    onKeydown (e) {
-      const hasPressedEsc = e.keyCode === 27;
-      if (hasPressedEsc) {
-        this.close(e);
-      }
-    },
-    onEnter () {
-      this.$emit('show-modal');
-      this.bindEventListeners();
-      apos.modal.stack = apos.modal.stack || [];
-      apos.modal.stack.push(this);
-      this.$nextTick(() => {
-        this.$emit('ready');
-      });
-    },
-    onLeave () {
-      this.removeEventListeners();
-      this.$emit('no-modal');
-      // pop doesn't quite suffice because of race conditions when
-      // closing one and opening another
-      apos.modal.stack = apos.modal.stack.filter(modal => modal !== this);
-    },
-    bindEventListeners () {
-      window.addEventListener('keydown', this.onKeydown);
-    },
-    removeEventListeners () {
-      window.removeEventListener('keydown', this.onKeydown);
-    },
-    close (e) {
-      if (apos.modal.stack[apos.modal.stack.length - 1] !== this) {
-        return;
-      }
-      e.stopPropagation();
-      this.$emit('esc');
-    },
-    trapFocus () {
-      // Adapted from https://uxdesign.cc/how-to-trap-focus-inside-modal-to-make-it-ada-compliant-6a50f9a70700
-      // All the elements inside modal which you want to make focusable.
-      const focusableElements = [
-        'button',
-        '[href]',
-        'input',
-        'select',
-        'textarea',
-        '[tabindex]:not([tabindex="-1"]'
-      ];
-      const focusableString = focusableElements.join(', ');
-      const modalEl = this.$refs.modalEl;
-      const focusables = modalEl.querySelectorAll(focusableString);
-      const firstFocusableElement = focusables[0];
-      const lastFocusableElement = focusables[focusables.length - 1];
 
-      modalEl.addEventListener('keydown', cycleFocusables);
+import {
+  ref, onMounted, onUnmounted, computed, watch, nextTick, useSlots
+} from 'vue';
+import { useAposFocus } from 'Modules/@apostrophecms/modal/composables/AposFocus';
+import { useModalStore } from 'Modules/@apostrophecms/ui/stores/modal';
 
-      firstFocusableElement.focus();
+const {
+  cycleElementsToFocus,
+  focusElement,
+  focusLastModalFocusedElement,
+  storeFocusedElement,
+  findPriorityElementOrFirst
+} = useAposFocus();
 
-      function cycleFocusables (e) {
-        const isTabPressed = e.key === 'Tab' || e.code === 'Tab';
-        if (!isTabPressed) {
-          return;
-        }
-
-        if (e.shiftKey) {
-          // If shift key pressed for shift + tab combination
-          if (document.activeElement === firstFocusableElement) {
-            // Add focus for the last focusable element
-            lastFocusableElement.focus();
-            e.preventDefault();
-          }
-        } else {
-          // If tab key is pressed
-          if (document.activeElement === lastFocusableElement) {
-            // Add focus for the first focusable element
-            firstFocusableElement.focus();
-            e.preventDefault();
-          }
-        }
-      }
-    }
+const props = defineProps({
+  modal: {
+    type: Object,
+    required: true
+  },
+  modalTitle: {
+    type: [ String, Object ],
+    default: ''
+  },
+  modalData: {
+    type: Object,
+    required: true
   }
-};
+});
+
+const store = useModalStore();
+
+const slots = useSlots();
+const emit = defineEmits([ 'inactive', 'esc', 'show-modal', 'no-modal', 'ready' ]);
+const modalEl = ref(null);
+const findPriorityFocusElementRetryMax = ref(3);
+const currentPriorityFocusElementRetry = ref(0);
+const renderingElements = ref(true);
+const currentLocale = ref(store.activeModal?.locale || apos.i18n.locale);
+
+const transitionType = computed(() => {
+  if (props.modal.type !== 'slide') {
+    return 'fade';
+  }
+
+  if (props.modal.origin === 'left') {
+    return 'slide-right';
+  }
+
+  return 'slide-left';
+});
+
+const shouldTrapFocus = computed(() => {
+  return props.modal.trapFocus || props.modal.trapFocus === undefined;
+});
+
+const triggerFocusRefresh = computed(() => {
+  return props.modal.triggerFocusRefresh;
+});
+
+const hasBeenLocalized = computed(() => {
+  return Object.keys(apos.i18n.locales).length > 1;
+});
+
+function hasSlot(slotName) {
+  return Boolean(slots[slotName]);
+}
+
+const classes = computed(() => {
+  const classes = [ 'apos-modal' ];
+  classes.push(`apos-modal--${props.modal.type}`);
+  if (props.modal.type === 'slide') {
+    if (props.modal.origin) {
+      classes.push(`apos-modal--origin-${props.modal.origin}`);
+    } else {
+      classes.push('apos-modal--origin-right');
+    }
+    classes.push('apos-modal--full-height');
+  }
+  if (props.modal.busy) {
+    classes.push('apos-modal--busy');
+  }
+  return classes.join(' ');
+});
+
+const innerClasses = computed(() => {
+  const classes = [];
+  if (props.modal.width) {
+    classes.push(`apos-modal__inner--${props.modal.width}`);
+  };
+
+  return classes;
+});
+
+const gridModifier = computed(() => {
+  const hasLeftRail = hasSlot('leftRail');
+  const hasRightRail = hasSlot('rightRail');
+
+  if (hasLeftRail && hasRightRail) {
+    return 'apos-modal__main--with-rails';
+  }
+  if (hasLeftRail && !hasRightRail) {
+    return 'apos-modal__main--with-left-rail';
+  }
+  if (!hasLeftRail && hasRightRail) {
+    return 'apos-modal__main--with-right-rail';
+  }
+  return false;
+});
+
+watch(triggerFocusRefresh, (newVal) => {
+  if (shouldTrapFocus.value) {
+    nextTick(trapFocus);
+  }
+});
+
+onMounted(async () => {
+  await nextTick();
+  if (shouldTrapFocus.value) {
+    await trapFocus();
+  } else {
+    renderingElements.value = false;
+  }
+  store.updateModalData(props.modalData.id, { modalEl: modalEl.value });
+  window.addEventListener('keydown', onKeydown);
+});
+
+onUnmounted(() => {
+  window.removeEventListener('keydown', onKeydown);
+});
+
+function onKeydown(e) {
+  const hasPressedEsc = e.keyCode === 27;
+  if (hasPressedEsc) {
+    close(e);
+  }
+}
+
+function onTab(e) {
+  cycleElementsToFocus(e, props.modalData.elementsToFocus);
+}
+
+async function onEnter() {
+  emit('show-modal');
+
+  await nextTick();
+  emit('ready');
+}
+
+function onLeave() {
+  store.remove(props.modalData.id);
+  focusLastModalFocusedElement();
+  emit('no-modal');
+}
+
+function captureFocus(e) {
+  storeFocusedElement(e);
+  store.updateModalData(props.modalData.id, { focusedElement: e.target });
+}
+
+async function trapFocus() {
+  if (modalEl?.value) {
+    const elementSelectors = [
+      '[tabindex]',
+      '[href]',
+      'input',
+      'select',
+      'textarea',
+      'button',
+      '[data-apos-focus-priority]'
+    ];
+
+    const selector = elementSelectors
+      .map(addExcludingAttributes)
+      .join(', ');
+
+    const elementsToFocus = [ ...modalEl.value.querySelectorAll(selector) ];
+
+    store.updateModalData(props.modalData.id, { elementsToFocus });
+
+    const firstElementToFocus = findPriorityElementOrFirst(elementsToFocus);
+    const foundPriorityElement = firstElementToFocus?.hasAttribute('data-apos-focus-priority');
+
+    // // Components render at various times and can't be counted on to be available on modal's mount
+    // // Update the trap focus list until a data-apos-focus-priority element is found or the retry limit is reached
+    if (!foundPriorityElement && findPriorityFocusElementRetryMax.value > currentPriorityFocusElementRetry.value) {
+      await new Promise(resolve => setTimeout(resolve, 50));
+      currentPriorityFocusElementRetry.value++;
+      await trapFocus();
+      return;
+    }
+    renderingElements.value = false;
+    await nextTick();
+    focusElement(props.modalData.focusedElement, firstElementToFocus);
+  }
+
+  function addExcludingAttributes(element) {
+    return `${element}:not([tabindex="-1"]):not([disabled]):not([type="hidden"]):not([aria-hidden]):not(.apos-sr-only)`;
+  }
+}
+
+function close() {
+  const activeModalId = store.activeModal?.id;
+  if (activeModalId === props.modalData.id) {
+    emit('esc');
+  }
+}
 </script>
 
 <style lang="scss" scoped>
@@ -284,29 +324,31 @@ export default {
   .apos-modal__inner {
     z-index: $z-index-modal;
     position: fixed;
-    top: $spacing-double;
-    right: $spacing-double;
-    bottom: $spacing-double;
-    left: $spacing-double;
-    display: grid;
-    grid-template-rows: auto 1fr auto;
-    height: calc(100vh - #{$spacing-double * 2});
+    inset: $spacing-base $spacing-base $spacing-base $spacing-base;
+    display: flex;
+    flex-direction: column;
+    height: calc(100vh - $spacing-base * 2);
     border-radius: var(--a-border-radius);
     background-color: var(--a-background-primary);
     border: 1px solid var(--a-base-9);
     color: var(--a-text-primary);
 
+    @include media-up(lap) {
+      inset: $spacing-double $spacing-double $spacing-double $spacing-double;
+      height: calc(100vh - #{$spacing-double * 2});
+    }
+
     .apos-modal--slide & {
       position: fixed;
-      transition: transform 0.15s ease;
       top: 0;
       bottom: 0;
-      transform: translateX(0);
-      width: 90%;
-      border-radius: 0;
+      width: 100%;
       height: 100vh;
+      transition: transform 200ms ease;
+      transform: translateX(0);
+      border-radius: 0;
 
-      @media screen and (min-width: 800px) {
+      @include media-up(hands-wide) {
         max-width: 540px;
       }
     }
@@ -322,33 +364,39 @@ export default {
     }
 
     &.apos-modal__inner--two-thirds {
-      @media screen and (min-width: 800px) {
+      @include media-up(hands-wide) {
         max-width: 66%;
       }
     }
 
     &.apos-modal__inner--half {
-      @media screen and (min-width: 800px) {
+      @include media-up(hands-wide) {
         max-width: 50%;
       }
     }
 
-    &.slide-left-enter,
+    &.apos-modal__inner--full {
+      @include media-up(hands-wide) {
+        max-width: 100%;
+      }
+    }
+
+    &.slide-left-enter-from,
     &.slide-left-leave-to {
       transform: translateX(100%);
     }
 
-    &.slide-right-enter,
+    &.slide-right-enter-from,
     &.slide-right-leave-to {
       transform: translateX(-100%);
     }
 
     .apos-modal--overlay & {
       transform: scale(1);
-      transition: opacity 0.15s ease, transform 0.15s ease;
+      transition: opacity 200ms ease, transform 200ms ease;
     }
 
-    &.fade-enter,
+    &.fade-enter-from,
     &.fade-leave-to {
       opacity: 0;
       transform: scale(0.95);
@@ -359,33 +407,34 @@ export default {
     height: 100%;
   }
 
-  .apos-modal__header {
-    grid-row: 1 / 2;
+  .apos-modal__content {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
   }
 
   .apos-modal__main {
     display: grid;
-    grid-row: 2 / 3;
+    flex-grow: 1;
     overflow-y: auto;
   }
 
   .apos-modal__overlay {
     z-index: $z-index-modal;
     position: fixed;
-    top: 0;
-    right: 0;
-    bottom: 0;
-    left: 0;
+    inset: 0;
     background-color: var(--a-overlay-modal);
 
     .apos-modal--slide &,
     .apos-modal--overlay & {
-      transition: opacity 0.15s ease;
+      transition: opacity 200ms ease;
     }
 
-    &.slide-enter,
-    &.slide-leave-to,
-    &.fade-enter,
+    &.slide-left-enter-from,
+    &.slide-left-leave-to,
+    &.slide-right-enter-from,
+    &.slide-right-leave-to,
+    &.fade-enter-from,
     &.fade-leave-to {
       opacity: 0;
     }
@@ -411,16 +460,13 @@ export default {
   .apos-modal__footer__inner,
   .apos-modal__header__main {
     display: flex;
-    padding: $spacing-double;
     align-items: center;
+    padding: $spacing-double;
+    line-height: var(--a-line-base);
   }
 
   .apos-modal__header__main {
     border-bottom: 1px solid var(--a-base-9);
-  }
-
-  .apos-modal__footer {
-    grid-row: 3 / 4;
   }
 
   .apos-modal__footer__inner {
@@ -439,29 +485,28 @@ export default {
   }
 
   .apos-modal__controls--header {
-    justify-content: flex-end;
     flex-grow: 1;
+    justify-content: flex-end;
   }
-  .apos-modal__controls--primary ::v-deep {
+
+  :deep(.apos-modal__controls--primary) {
     & > .apos-button__wrapper,
     & > .apos-context-menu {
+      margin-right: 7.5px;
       margin-left: 7.5px;
     }
   }
 
   .apos-modal__locale {
-    @include type-base;
     margin-right: $spacing-double;
-    font-weight: var(--a-weight-bold);
-  }
-
-  .apos-modal__locale-name {
-    color: var(--a-primary);
   }
 
   .apos-modal__heading {
     @include type-title;
-    margin: 0;
+
+    & {
+      margin: 0;
+    }
   }
 
   .apos-modal__controls--secondary {
@@ -469,7 +514,11 @@ export default {
   }
 
   .apos-modal__main--with-rails {
-    grid-template-columns: 20% 1fr minmax(250px, $modal-rail-right-w);
+    grid-template-columns: 15% 1fr minmax(200px, 10%);
+
+    @include media-up(lap) {
+      grid-template-columns: 15% 1fr minmax(250px, $modal-rail-right-w);
+    }
   }
 
   .apos-modal__main--with-left-rail {
@@ -482,14 +531,15 @@ export default {
 
   .apos-modal--busy .apos-modal__inner {
     $height: 190px;
+
     top: 50%;
     bottom: -50%;
     display: flex;
-    height: $height;
-    transform: translateY(math.div($height, 2) * -1);
-    justify-content: center;
     align-items: center;
+    justify-content: center;
+    height: $height;
     text-align: center;
+    transform: translateY(math.div($height, 2) * -1);
   }
 
   .apos-modal__busy-text {

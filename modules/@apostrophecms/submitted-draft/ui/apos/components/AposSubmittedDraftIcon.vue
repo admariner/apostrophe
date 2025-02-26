@@ -1,11 +1,12 @@
 <template>
   <AposButton
     icon="tray-full-icon"
-    type="subtle" :modifiers="['small', 'no-motion']"
-    @click="open"
+    type="subtle"
+    :modifiers="['small', 'no-motion']"
     :disabled="count <= 0"
     :tooltip="tooltip"
     :icon-only="true"
+    @click="open"
   >
     <template #label>
       <span v-if="canPublish && count > 0" class="apos-submitted-drafts__counter">
@@ -37,7 +38,7 @@ export default {
   mounted() {
     this.updateCount();
   },
-  destroyed() {
+  unmounted() {
     if (this.timeout) {
       clearTimeout(this.timeout);
     }
@@ -69,18 +70,18 @@ export default {
 </script>
 
 <style lang="scss" scoped>
-  ::v-deep .apos-submitted-drafts__counter {
+  :deep(.apos-submitted-drafts__counter) {
     display: inline-flex;
-    margin-left: $spacing-half;
-    padding: 3px;
-    background-color: var(--a-primary-transparent-10);
-    border-radius: var(--a-border-radius);
-    color: var(--a-primary);
-    min-width: 15px;
-    min-height: 15px;
     align-items: center;
     justify-content: center;
+    margin-left: $spacing-half;
+    padding: 3px;
+    color: var(--a-primary);
     font-size: var(--a-type-small);
+    background-color: var(--a-primary-transparent-10);
+    border-radius: var(--a-border-radius);
+    min-width: 15px;
+    min-height: 15px;
     line-height: 0.9;
   }
 </style>
